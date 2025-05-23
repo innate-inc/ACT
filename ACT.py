@@ -329,4 +329,58 @@ def get_activation_fn(activation: str) -> Callable:
         return F.glu
     raise RuntimeError(f"activation should be relu/gelu/glu, not {activation}.")
 
+class ACTTemporalEnsembler:
+    """Temporal ensembling as described in Algorithm 2 of https://arxiv.org/abs/2304.13705.
+    
+    The weights are calculated as wᵢ = exp(-temporal_ensemble_coeff * i) where w₀ is the oldest action.
+    They are then normalized to sum to 1 by dividing by Σwᵢ.
+    """
+    
+    def __init__(self, temporal_ensemble_coeff: float, chunk_size: int) -> None:
+        self.chunk_size = chunk_size
+        self.ensemble_weights = torch.exp(-temporal_ensemble_coeff * torch.arange(chunk_size))
+        self.ensemble_weights_cumsum = torch.cumsum(self.ensemble_weights, dim=0)
+        self.reset()
+
+    def reset(self):
+        """Resets the online computation variables."""
+        self.ensembled_actions = None
+        # (chunk_size,) count of how many actions are in the ensemble for each time step
+        self.ensembled_actions_count = None
+
+    def update(self, actions: Tensor) -> Tensor:
+        """
+        Takes a (batch, chunk_size, action_dim) sequence of actions, update the temporal ensemble for all
+        time steps, and pop/return the next batch of actions in the sequence.
+        """
+        self.ensemble_weights = self.ensemble_weights.to(device=actions.device)
+        self.ensemble_weights_cumsum = self.ensemble_weights_cumsum.to(device=actions.device)
+        
+        if self.ensembled_actions is None:
+            # Initialize with the first sequence of actions
+            self.ensembled_actions = actions.clone()
+            self.ensembled_actions_count = torch.ones(
+                (self.chunk_size, 1), dtype=torch.long, device=self.ensembled_actions.device
+            )
+        else:
+            # Update existing ensemble
+            self.ensembled_actions *= self.ensemble_weights_cumsum[self.ensembled_actions_count - 1]
+            self.ensembled_actions += actions[:, :-1] * self.ensemble_weights[self.ensembled_actions_count]
+            self.ensembled_actions /= self.ensemble_weights_cumsum[self.ensembled_actions_count]
+            self.ensembled_actions_count = torch.clamp(self.ensembled_actions_count + 1, max=self.chunk_size)
+            
+            # Add the last action which has no prior online average
+            self.ensembled_actions = torch.cat([self.ensembled_actions, actions[:, -1:]], dim=1)
+            self.ensembled_actions_count = torch.cat(
+                [self.ensembled_actions_count, torch.ones_like(self.ensembled_actions_count[-1:])]
+            )
+        
+        # Return the first action and update the queue
+        action, self.ensembled_actions, self.ensembled_actions_count = (
+            self.ensembled_actions[:, 0],
+            self.ensembled_actions[:, 1:],
+            self.ensembled_actions_count[1:],
+        )
+        return action
+
 # Continue with ACT, ACTTemporalEnsembler, and other supporting classes...
