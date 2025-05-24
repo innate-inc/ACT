@@ -3,8 +3,9 @@ import random
 import h5py
 import numpy as np
 import torch
-from torch.utils.data import Dataset
-from typing import List, Dict, Any, Optional
+from torch.utils.data import Dataset, DataLoader
+from typing import List, Dict, Any, Optional, Tuple
+import json
 
 # Assuming torchvision.transforms.v2 will be available if default augmentation is used.
 # If not, and use_img_aug=True with img_aug_transforms=None, a NameError/ImportError will occur.
@@ -174,4 +175,119 @@ class EpisodicHDF5DatasetRAM(Dataset):
                 item[policy_keys_for_img_aug[i]] = self.transforms(img_to_aug)
         
         return item
+
+def initialize_data(
+    data_dir: str,
+    chunk_size: int,
+    train_val_split: float = 0.9,
+    batch_size: int = 32,
+    num_workers: int = 0,
+    use_img_aug_train: bool = False,
+    use_img_aug_val: bool = False,
+    img_aug_transforms_train: Optional[torch.nn.Module] = None,
+    img_aug_transforms_val: Optional[torch.nn.Module] = None,
+    seed: Optional[int] = None
+) -> Tuple[DataLoader, DataLoader, Dict[str, Dict[str, torch.Tensor]]]:
+    """
+    Initializes training and validation DataLoaders from HDF5 episodes listed in metadata.json.
+
+    Args:
+        data_dir: Directory containing 'metadata.json' and HDF5 episode files.
+        chunk_size: The chunk size for loading sequences from episodes.
+        train_val_split: Fraction of episodes to use for training (0.0 to 1.0).
+        batch_size: Batch size for the DataLoaders.
+        num_workers: Number of worker processes for data loading. Defaults to 0.
+        use_img_aug_train: Whether to use image augmentation for the training set.
+        use_img_aug_val: Whether to use image augmentation for the validation set.
+                       (Typically False for validation).
+        img_aug_transforms_train: Custom torchvision transforms for training images.
+                                  If None and use_img_aug_train is True, default is used.
+        img_aug_transforms_val: Custom torchvision transforms for validation images.
+                                If None and use_img_aug_val is True, default is used.
+        seed: Optional random seed for reproducible train/val split.
+
+    Returns:
+        A tuple containing:
+            - train_dataloader: DataLoader for the training set.
+            - val_dataloader: DataLoader for the validation set.
+            - dataset_stats: Normalization statistics computed from the training set.
+    """
+    metadata_path = os.path.join(data_dir, "metadata.json")
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"metadata.json not found in {data_dir}")
+
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f)
+
+    all_episode_ids = [ep_info["episode_id"] for ep_info in metadata.get("episodes", [])]
+    if not all_episode_ids:
+        raise ValueError("No episodes found in metadata.json or 'episodes' key is missing/empty.")
+
+    if seed is not None:
+        random.seed(seed)
+    random.shuffle(all_episode_ids)
+
+    num_total_episodes = len(all_episode_ids)
+    num_train_episodes = int(num_total_episodes * train_val_split)
+    
+    train_episode_ids = all_episode_ids[:num_train_episodes]
+    val_episode_ids = all_episode_ids[num_train_episodes:]
+
+    if not train_episode_ids:
+        raise ValueError(
+            f"Train/validation split resulted in 0 training episodes. "
+            f"Total episodes: {num_total_episodes}, requested train split: {train_val_split}. "
+            f"Ensure 'train_val_split' is > 0 or there are enough episodes."
+        )
+    
+    if not val_episode_ids:
+        print(
+            f"Warning: Train/validation split resulted in 0 validation episodes. "
+            f"Total episodes: {num_total_episodes}, train split: {train_val_split} "
+            f"(Num train: {len(train_episode_ids)}, Num val: {len(val_episode_ids)}). "
+            f"Validation DataLoader will be empty."
+        )
+
+    # Create training dataset
+    train_dataset = EpisodicHDF5DatasetRAM(
+        data_dir=data_dir,
+        episode_ids=train_episode_ids,
+        chunk_size=chunk_size,
+        use_img_aug=use_img_aug_train,
+        img_aug_transforms=img_aug_transforms_train
+    )
+
+    # Compute stats from the training dataset
+    dataset_stats = train_dataset.get_dataset_stats()
+
+    # Create validation dataset
+    # Handles val_episode_ids being empty, resulting in an empty dataset
+    val_dataset = EpisodicHDF5DatasetRAM(
+        data_dir=data_dir,
+        episode_ids=val_episode_ids, 
+        chunk_size=chunk_size,
+        use_img_aug=use_img_aug_val,
+        img_aug_transforms=img_aug_transforms_val
+    )
+
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available() 
+    )
+    
+    # For validation, shuffle is usually False.
+    # DataLoader handles empty val_dataset (if val_episode_ids was empty) correctly,
+    # it will simply yield no batches.
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available()
+    )
+
+    return train_dataloader, val_dataloader, dataset_stats
 
