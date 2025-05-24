@@ -23,34 +23,32 @@ class EpisodicHDF5DatasetRAM(Dataset):
     H5_CAMERA_NAMES = ['camera_1', 'camera_2'] 
 
     POLICY_ACTION_KEY = 'action'
-    POLICY_QPOS_KEY = 'observation.qpos' 
+    POLICY_QPOS_KEY = 'observation.state'
     POLICY_IMG_KEYS = ['observation.image_camera_1', 'observation.image_camera_2']
     # --- End Hardcoded Values ---
 
     def __init__(self,
                  data_dir: str,
                  episode_ids: List[int],
+                 chunk_size: int,
                  use_img_aug: bool = False,
                  img_aug_transforms: Optional[torch.nn.Module] = None):
         super().__init__()
         self.data_dir = data_dir
+        self.chunk_size = chunk_size
         self.use_img_aug = use_img_aug
         self.transforms = img_aug_transforms
 
         if self.use_img_aug and self.transforms is None:
-            # Directly uses v2, will fail if not imported/available.
             self.transforms = v2.Compose([v2.RandomPhotometricDistort(p=0.5), v2.RandomHorizontalFlip(p=0.5)])
-        # If use_img_aug is False, or if img_aug_transforms is provided, this block is skipped or uses provided one.
 
         self.loaded_episodes_data: List[Dict[str, Any]] = []
         self.episode_info: List[Dict[str, Any]] = []
-        self.max_episode_length = 0
         
         for ep_id in episode_ids:
             file_path = os.path.join(self.data_dir, f"episode_{ep_id}.h5")
             with h5py.File(file_path, 'r') as f:
                 current_ep_len = f[self.H5_ACTION_KEY].shape[0]
-                self.max_episode_length = max(self.max_episode_length, current_ep_len)
                 
                 ep_data_ram = {}
                 ep_data_ram[self.POLICY_ACTION_KEY] = torch.from_numpy(f[self.H5_ACTION_KEY][:]).float()
@@ -60,10 +58,78 @@ class EpisodicHDF5DatasetRAM(Dataset):
                     policy_img_key = self.POLICY_IMG_KEYS[i]
                     h5_img_path = f'observations/images/{h5_cam_name}'
                     img_thwc_uint8 = f[h5_img_path][:]
-                    ep_data_ram[policy_img_key] = torch.from_numpy(img_thwc_uint8).float().permute(0, 3, 1, 2) / 255.0
+                    img_tchw_float = torch.from_numpy(img_thwc_uint8).float().permute(0, 3, 1, 2) / 255.0
+                    ep_data_ram[policy_img_key] = img_tchw_float
                 
                 self.loaded_episodes_data.append(ep_data_ram)
                 self.episode_info.append({"id": ep_id, "length": current_ep_len})
+        
+        # Compute statistics using the "collect references then concatenate" method
+        self.computed_stats = self._compute_stats_via_concat()
+
+    def _compute_stats_via_concat(self) -> Dict[str, Dict[str, torch.Tensor]]:
+        """
+        Computes mean and standard deviation by first collecting references to
+        all relevant tensors from self.loaded_episodes_data, then concatenating
+        them once per modality, and finally computing stats.
+        """
+        stats: Dict[str, Dict[str, torch.Tensor]] = {}
+
+        if not self.loaded_episodes_data: # Handle case with no episodes
+            if self.POLICY_QPOS_KEY:
+                 stats[self.POLICY_QPOS_KEY] = {"mean": torch.zeros(self.QPOS_DIM), "std": torch.ones(self.QPOS_DIM)}
+            if self.POLICY_ACTION_KEY:
+                stats[self.POLICY_ACTION_KEY] = {"mean": torch.zeros(self.ACTION_DIM), "std": torch.ones(self.ACTION_DIM)}
+            for key in self.POLICY_IMG_KEYS:
+                 stats[key] = {"mean": torch.zeros(self.IMAGE_C,1,1), "std": torch.ones(self.IMAGE_C,1,1)}
+            return stats
+
+        # Collect tensor references for stats from self.loaded_episodes_data
+        qpos_tensors_for_stats = [ep_data[self.POLICY_QPOS_KEY] for ep_data in self.loaded_episodes_data if self.POLICY_QPOS_KEY in ep_data]
+        action_tensors_for_stats = [ep_data[self.POLICY_ACTION_KEY] for ep_data in self.loaded_episodes_data if self.POLICY_ACTION_KEY in ep_data]
+        
+        img_tensors_for_stats: Dict[str, List[torch.Tensor]] = {key: [] for key in self.POLICY_IMG_KEYS}
+        for key in self.POLICY_IMG_KEYS:
+            for ep_data in self.loaded_episodes_data:
+                if key in ep_data:
+                    img_tensors_for_stats[key].append(ep_data[key])
+
+        # Compute stats for QPOS (State)
+        if qpos_tensors_for_stats:
+            qpos_tensor_all = torch.cat(qpos_tensors_for_stats, dim=0)
+            stats[self.POLICY_QPOS_KEY] = {
+                "mean": torch.mean(qpos_tensor_all, dim=0),
+                "std": torch.clamp(torch.std(qpos_tensor_all, dim=0), min=1e-6)
+            }
+        else: # Default if no qpos data found
+            stats[self.POLICY_QPOS_KEY] = {"mean": torch.zeros(self.QPOS_DIM), "std": torch.ones(self.QPOS_DIM)}
+        
+        # Compute stats for Action
+        if action_tensors_for_stats:
+            action_tensor_all = torch.cat(action_tensors_for_stats, dim=0)
+            stats[self.POLICY_ACTION_KEY] = {
+                "mean": torch.mean(action_tensor_all, dim=0),
+                "std": torch.clamp(torch.std(action_tensor_all, dim=0), min=1e-6)
+            }
+        else: # Default if no action data
+            stats[self.POLICY_ACTION_KEY] = {"mean": torch.zeros(self.ACTION_DIM), "std": torch.ones(self.ACTION_DIM)}
+
+        # Compute stats for Images
+        for policy_img_key in self.POLICY_IMG_KEYS:
+            if img_tensors_for_stats[policy_img_key]:
+                img_tensor_all = torch.cat(img_tensors_for_stats[policy_img_key], dim=0)
+                stats[policy_img_key] = {
+                    "mean": torch.mean(img_tensor_all, dim=(0, 2, 3)).reshape(-1, 1, 1),
+                    "std": torch.clamp(torch.std(img_tensor_all, dim=(0, 2, 3)).reshape(-1, 1, 1), min=1e-6)
+                }
+            else: # Default if no image data for this key
+                stats[policy_img_key] = {"mean": torch.zeros(self.IMAGE_C,1,1), "std": torch.ones(self.IMAGE_C,1,1)}
+        
+        return stats
+
+    def get_dataset_stats(self) -> Dict[str, Dict[str, torch.Tensor]]:
+        """Returns the computed normalization statistics for the dataset."""
+        return self.computed_stats
 
     def __len__(self) -> int:
         return len(self.loaded_episodes_data)
@@ -76,16 +142,18 @@ class EpisodicHDF5DatasetRAM(Dataset):
         start_ts = random.randint(0, ep_len - 1) 
         item: Dict[str, Any] = {}
 
-        action_start_idx = max(0, start_ts - 1)
-        actions_raw = ep_data[self.POLICY_ACTION_KEY][action_start_idx:]
+        actions_full_episode = ep_data[self.POLICY_ACTION_KEY]
+        actions_raw = actions_full_episode[start_ts : start_ts + self.chunk_size]
         actions_raw_len = actions_raw.shape[0]
 
-        padded_actions = torch.zeros((self.max_episode_length, self.ACTION_DIM), dtype=torch.float32)
-        padded_actions[:actions_raw_len] = actions_raw
+        padded_actions = torch.zeros((self.chunk_size, self.ACTION_DIM), dtype=torch.float32)
+        if actions_raw_len > 0:
+            padded_actions[:actions_raw_len] = actions_raw
         item[self.POLICY_ACTION_KEY] = padded_actions
         
-        action_is_pad = torch.ones(self.max_episode_length, dtype=torch.bool)
-        action_is_pad[:actions_raw_len] = False
+        action_is_pad = torch.ones(self.chunk_size, dtype=torch.bool)
+        if actions_raw_len > 0:
+            action_is_pad[:actions_raw_len] = False
         item["action_is_pad"] = action_is_pad
 
         item[self.POLICY_QPOS_KEY] = ep_data[self.POLICY_QPOS_KEY][start_ts]
