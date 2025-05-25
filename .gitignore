@@ -6,3 +6,5 @@ __pycache__/
 
 # W&B
 wandb/
+
+act_test.egg-info/
