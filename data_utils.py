@@ -222,6 +222,8 @@ def initialize_data(
     all_episode_ids = [ep_info["episode_id"] for ep_info in metadata.get("episodes", [])]
     if not all_episode_ids:
         raise ValueError("No episodes found in metadata.json or 'episodes' key is missing/empty.")
+    
+    print(f"Found a total of {len(all_episode_ids)} episodes: {sorted(all_episode_ids)}")
 
     if seed is not None:
         random.seed(seed)
@@ -232,6 +234,9 @@ def initialize_data(
     
     train_episode_ids = all_episode_ids[:num_train_episodes]
     val_episode_ids = all_episode_ids[num_train_episodes:]
+
+    print(f"Using {len(train_episode_ids)} episodes for training: {sorted(train_episode_ids)}")
+    print(f"Using {len(val_episode_ids)} episodes for validation: {sorted(val_episode_ids)}")
 
     if not train_episode_ids:
         raise ValueError(
