@@ -176,13 +176,13 @@ def main():
         try:
             # select_action expects a batch and returns actions for that batch
             # For a single step prediction based on current obs of the batch
-            # current_obs_batch = {
-            #     key: (
-            #         val[:, 0] if key == POLICY_QPOS_KEY and val.ndim > 2 else val
-            #     )  # Select first qpos if it's a sequence
-            #     for key, val in train_batch.items()
-            #     if key.startswith("observation") or key == POLICY_QPOS_KEY
-            # }
+            current_obs_batch = {
+                key: (
+                    val[:, 0] if key == POLICY_QPOS_KEY and val.ndim > 2 else val
+                )  # Select first qpos if it's a sequence
+                for key, val in train_batch.items()
+                if key.startswith("observation") or key == POLICY_QPOS_KEY
+            }
             # Ensure correct shapes for select_action if it expects non-sequenced obs
             # The current select_action in ACT.py takes the full batch (which includes sequences)
             # and its internal model call will handle it.
