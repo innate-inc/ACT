@@ -129,6 +129,11 @@ def main(args):
         traceback.print_exc()
         return
 
+    print("Compiling policy...")
+    policy = torch.compile(policy)
+
+    print("Policy compiled successfully.")
+
     policy.eval()
     policy.reset()  # As per typical inference setup
 
@@ -296,20 +301,30 @@ def main(args):
         # --- 6. Profiling ---
         log_file.write("\n\n--- Profiling Inference Speed ---\n")
         num_inferences = 0
-        profiling_duration = 5.0  # seconds
+        profiling_duration = 30.0  # seconds (Increased)
+        warmup_iterations = 5  # Added
+
         # Warm-up inference
         if policy and observation_batch:
-            try:
-                with torch.no_grad():
-                    _ = policy.select_action(observation_batch)
-            except Exception as e:
-                print(f"Error during warm-up inference: {e}")
-                log_file.write(f"Error during warm-up inference: {e}\n")
+            print("Starting warm-up inferences...")  # Added print
+            for _ in range(warmup_iterations):
+                try:
+                    with torch.no_grad():
+                        _ = policy.select_action(observation_batch)
+                        # if device.type == "cuda": # Removed for CPU focus
+                        #     torch.cuda.synchronize() # Ensure warm-up is complete
+                except Exception as e:
+                    print(f"Error during warm-up inference: {e}")
+                    log_file.write(f"Error during warm-up inference: {e}\n")
+                    break  # Stop if warmup fails
+            print("Warm-up complete.")  # Added print
 
         print_msg_profiling = "\nStarting profiling loop..."
         print(print_msg_profiling)
-        log_file.write(f"{print_msg_profiling.strip()}\n")
+        log_file.write(f"{print_msg_profiling.strip()}\\n")
 
+        # if device.type == "cuda": # Removed for CPU focus
+        #     torch.cuda.synchronize() # Synchronize before starting timer
         start_time = time.time()
         while (time.time() - start_time) < profiling_duration:
             try:
@@ -320,8 +335,10 @@ def main(args):
             except Exception as e:
                 error_msg = f"Error during profiling inference: {e}"
                 print(error_msg)
-                log_file.write(f"{error_msg}\n")
+                log_file.write(f"{error_msg}\\n")
                 break  # Stop profiling on error
+        # if device.type == "cuda": # Removed for CPU focus
+        #    torch.cuda.synchronize() # Synchronize before ending timer
         end_time = time.time()
         actual_duration = end_time - start_time
         inferences_per_second = (
