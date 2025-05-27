@@ -1,0 +1,48 @@
+Benchmark Run: 20250527_132743
+Git Commit: 082d0d6
+Checkpoint: model/ckpt_vig.pth
+
+Creating standard input batch (bs=1, ROS-style single step):
+  observation.state shape: torch.Size([1, 6])
+  observation.state (first 3 values): [1.0, 1.0, 1.0]
+  observation.image_camera_1 shape: torch.Size([1, 3, 480, 640])
+  observation.image_camera_1 sample value (first pixel, all channels): [0.5, 0.5, 0.5]
+  observation.image_camera_2 shape: torch.Size([1, 3, 480, 640])
+  observation.image_camera_2 sample value (first pixel, all channels): [0.699999988079071, 0.699999988079071, 0.699999988079071]
+
+--- Full Input Observation Batch (NumPy) ---
+Key: observation.state
+  Value:
+[[1. 1. 1. 1. 1. 1.]]
+Key: observation.image_camera_1
+  Shape: torch.Size([1, 3, 480, 640])
+  Dtype: torch.float32
+  Sample Slice (e.g., [0,0,:5,:5]):
+[[0.5 0.5 0.5 0.5 0.5]
+ [0.5 0.5 0.5 0.5 0.5]
+ [0.5 0.5 0.5 0.5 0.5]
+ [0.5 0.5 0.5 0.5 0.5]
+ [0.5 0.5 0.5 0.5 0.5]]
+Key: observation.image_camera_2
+  Shape: torch.Size([1, 3, 480, 640])
+  Dtype: torch.float32
+  Sample Slice (e.g., [0,0,:5,:5]):
+[[0.7 0.7 0.7 0.7 0.7]
+ [0.7 0.7 0.7 0.7 0.7]
+ [0.7 0.7 0.7 0.7 0.7]
+ [0.7 0.7 0.7 0.7 0.7]
+ [0.7 0.7 0.7 0.7 0.7]]
+
+Applying model (policy.select_action) to standard batch...
+--- Model Output (Selected Action) ---
+  Selected Action Shape (original): torch.Size([1, 8])
+  Selected Action Shape (squeezed): (8,)
+  Selected Action Content (NumPy):
+[0.3674345016479492, 0.0002530217170715332, 0.3518172800540924, 0.5974605083465576, 0.5078617334365845, 0.7258505821228027, -0.0012410245835781097, -0.00014390680007636547]
+  Selected Action Dtype: torch.float32
+
+
+--- Profiling Inference Speed ---
+Starting profiling loop...
+Performed 659 inferences in 5.16 seconds.
+Inferences per second: 127.79

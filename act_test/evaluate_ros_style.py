@@ -5,6 +5,7 @@ import argparse
 import numpy as np
 import datetime
 import subprocess
+import time
 
 # Assuming ACT.py is in the same directory or PYTHONPATH
 from ACT import ACTConfig, ACTPolicy
@@ -140,18 +141,18 @@ def main(args):
     print(f"Logging benchmark data to: {log_filename}")
 
     with open(log_filename, "w") as log_file:
-        log_file.write(f"Benchmark Run: {timestamp}\n")
-        log_file.write(f"Git Commit: {commit_hash}\n")
-        log_file.write(f"Checkpoint: {checkpoint_full_path}\n\n")
+        log_file.write(f"Benchmark Run: {timestamp}\\n")
+        log_file.write(f"Git Commit: {commit_hash}\\n")
+        log_file.write(f"Checkpoint: {checkpoint_full_path}\\n\\n")
 
         # --- 4. Create Standard Input Vector (Batch) - ROS Style (single step) ---
         batch_size = 1  # ROS script processes one observation at a time
         print_msg = (
-            f"\nCreating standard input batch (bs={batch_size}, "
+            f"\\nCreating standard input batch (bs={batch_size}, "
             f"ROS-style single step):"
         )
         print(print_msg)
-        log_file.write(f"{print_msg.strip()}\n")
+        log_file.write(f"{print_msg.strip()}\\n")
 
         qpos_dim = act_config.input_shapes[POLICY_QPOS_KEY][0]
         action_dim_expected = act_config.output_shapes["action"][0]
@@ -176,10 +177,10 @@ def main(args):
         standard_qpos = torch.tensor(standard_qpos_np).to(device)
         print(f"  {POLICY_QPOS_KEY} shape: {standard_qpos.shape}")
         print(f"  {POLICY_QPOS_KEY} sample value: {standard_qpos_np[0, :3]}")
-        log_file.write(f"  {POLICY_QPOS_KEY} shape: {standard_qpos.shape}\n")
+        log_file.write(f"  {POLICY_QPOS_KEY} shape: {standard_qpos.shape}\\n")
         log_file.write(
             f"  {POLICY_QPOS_KEY} (first 3 values): "
-            f"{standard_qpos_np[0, :3].tolist()}\n"
+            f"{standard_qpos_np[0, :3].tolist()}\\n"
         )
 
         observation_batch = {POLICY_QPOS_KEY: standard_qpos}
@@ -194,14 +195,15 @@ def main(args):
             print(f"  {POLICY_IMG_KEY_1} shape: {standard_img1.shape}")
             # Print a small part of the image for verification
             print(
-                f"  {POLICY_IMG_KEY_1} sample value (first pixel, all channels): "
+                f"  {POLICY_IMG_KEY_1} sample value "
+                f"(first pixel, all channels): "
                 f"{standard_img1_np[0, :, 0, 0]}"
             )
-            log_file.write(f"  {POLICY_IMG_KEY_1} shape: {standard_img1.shape}\n")
+            log_file.write(f"  {POLICY_IMG_KEY_1} shape: {standard_img1.shape}\\n")
             log_file.write(
                 f"  {POLICY_IMG_KEY_1} sample value "
                 f"(first pixel, all channels): "
-                f"{standard_img1_np[0, :, 0, 0].tolist()}\n"
+                f"{standard_img1_np[0, :, 0, 0].tolist()}\\n"
             )
             observation_batch[POLICY_IMG_KEY_1] = standard_img1
 
@@ -215,18 +217,19 @@ def main(args):
             print(f"  {POLICY_IMG_KEY_2} shape: {standard_img2.shape}")
             # Print a small part of the image for verification
             print(
-                f"  {POLICY_IMG_KEY_2} sample value (first pixel, all channels): "
+                f"  {POLICY_IMG_KEY_2} sample value "
+                f"(first pixel, all channels): "
                 f"{standard_img2_np[0, :, 0, 0]}"
             )
-            log_file.write(f"  {POLICY_IMG_KEY_2} shape: {standard_img2.shape}\n")
+            log_file.write(f"  {POLICY_IMG_KEY_2} shape: {standard_img2.shape}\\n")
             log_file.write(
                 f"  {POLICY_IMG_KEY_2} sample value "
                 f"(first pixel, all channels): "
-                f"{standard_img2_np[0, :, 0, 0].tolist()}\n"
+                f"{standard_img2_np[0, :, 0, 0].tolist()}\\n"
             )
             observation_batch[POLICY_IMG_KEY_2] = standard_img2
 
-        log_file.write("\n--- Full Input Observation Batch (NumPy) ---\n")
+        log_file.write("\\n--- Full Input Observation Batch (NumPy) ---\\n")
         for key, tensor_val in observation_batch.items():
             log_file.write(f"Key: {key}\n")
             # For brevity, log only a slice or summary of large image arrays
@@ -289,6 +292,52 @@ def main(args):
 
             traceback.print_exc(file=log_file)
             traceback.print_exc()
+
+        # --- 6. Profiling ---
+        log_file.write("\n\n--- Profiling Inference Speed ---\n")
+        num_inferences = 0
+        profiling_duration = 5.0  # seconds
+        # Warm-up inference
+        if policy and observation_batch:
+            try:
+                with torch.no_grad():
+                    _ = policy.select_action(observation_batch)
+            except Exception as e:
+                print(f"Error during warm-up inference: {e}")
+                log_file.write(f"Error during warm-up inference: {e}\n")
+
+        print_msg_profiling = "\nStarting profiling loop..."
+        print(print_msg_profiling)
+        log_file.write(f"{print_msg_profiling.strip()}\n")
+
+        start_time = time.time()
+        while (time.time() - start_time) < profiling_duration:
+            try:
+                with torch.no_grad():
+                    # Use the same observation_batch from before
+                    _ = policy.select_action(observation_batch)
+                num_inferences += 1
+            except Exception as e:
+                error_msg = f"Error during profiling inference: {e}"
+                print(error_msg)
+                log_file.write(f"{error_msg}\n")
+                break  # Stop profiling on error
+        end_time = time.time()
+        actual_duration = end_time - start_time
+        inferences_per_second = (
+            num_inferences / actual_duration if actual_duration > 0 else 0
+        )
+
+        profiling_result_msg = (
+            f"Performed {num_inferences} inferences "
+            f"in {actual_duration:.2f} seconds."
+        )
+        ips_msg = f"Inferences per second: {inferences_per_second:.2f}"
+
+        print(profiling_result_msg)
+        print(ips_msg)
+        log_file.write(f"{profiling_result_msg}\n")
+        log_file.write(f"{ips_msg}\n")
 
     print(f"\nBenchmark data saved to {log_filename}")
 
