@@ -3,13 +3,15 @@ import torch.optim as optim
 from tqdm import tqdm
 import wandb
 import os # For WANDB_API_KEY and os.path, os.makedirs
+from datetime import datetime
+import socket
 
 from ACT import ACTConfig, ACTPolicy # Assuming ACT.py is in the same directory or PYTHONPATH
 from data_utils import initialize_data # Assuming data_utils.py is in the same directory or PYTHONPATH
 
 # --- Configuration ---
 # Data parameters
-DATA_DIR = "/home/vignesh/raid/PaperBench" # Replace with your actual data directory
+DATA_DIR = "/home/vignesh/raid/PaperCorner_Filtered" # Replace with your actual data directory
 CHUNK_SIZE = 30
 TRAIN_VAL_SPLIT = 0.9
 BATCH_SIZE = 32 # Adjust based on your GPU memory
@@ -17,8 +19,12 @@ NUM_WORKERS = 0 # Adjust based on your system
 USE_IMG_AUG_TRAIN = False # Example, set as needed
 USE_IMG_AUG_VAL = False
 
-# Checkpoint directory
-CHECKPOINT_DIR = "/home/vignesh/raid/PaperBench/checkpoints/" # Specify your desired checkpoint directory
+# Task name and automatic checkpoint directory generation
+TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))  # Extract directory name from DATA_DIR
+# Generate timestamp for consistent naming with wandb
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}"
+CHECKPOINT_DIR = os.path.join(DATA_DIR, "checkpoints", RUN_NAME)
 
 # ACT Policy parameters (Example - these should match your dataset and desired model complexity)
 # These are just placeholders and should be configured based on data_utils.py constants
@@ -46,19 +52,19 @@ N_ACTION_STEPS = CHUNK_SIZE # Number of action steps to predict (typically same 
 DIM_MODEL = 512
 N_HEADS = 8
 N_ENCODER_LAYERS = 4
-N_DECODER_LAYERS = 1 # Often larger for ACT
+N_DECODER_LAYERS = 4 # Often larger for ACT
 KL_WEIGHT = 10.0 # If using VAE
 USE_VAE = True # Or False, depending on your choice
 
 # Training parameters
-NUM_EPOCHS = 20
+NUM_EPOCHS = 100000
 LEARNING_RATE = 1e-5
-WEIGHT_DECAY = 1e-4
+WEIGHT_DECAY = 5e-4
 LEARNING_RATE_BACKBONE = 1e-5
 #GRAD_CLIP_NORM = 1.0 # Optional gradient clipping
 
 # W&B Configuration
-WANDB_PROJECT = "act-simple"
+WANDB_PROJECT = "act-simple"  # Fixed project name
 WANDB_ENTITY = None # Replace with your W&B username or team name if desired
 
 # Your W&B API Key
@@ -68,6 +74,10 @@ def main():
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    # Create checkpoint directory
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    print(f"Checkpoint directory: {CHECKPOINT_DIR}")
 
     # Initialize W&B
     # Try to use environment variable first, then fallback to the hardcoded key
@@ -79,8 +89,12 @@ def main():
         print("Warning: WANDB_API_KEY is still not set. WandB logging will likely fail.")
         print("Please ensure the key is valid or set it in your environment.")
 
-    wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, config={
+    wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=RUN_NAME, config={
         "data_dir": DATA_DIR,
+        "task_name": TASK_NAME,
+        "timestamp": TIMESTAMP,
+        "run_name": RUN_NAME,
+        "hostname": socket.gethostname(),
         "checkpoint_dir": CHECKPOINT_DIR,
         "chunk_size": CHUNK_SIZE,
         "batch_size": BATCH_SIZE,
@@ -129,7 +143,7 @@ def main():
 
     # Save dataset_stats
     if dataset_stats:
-        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+        # Note: CHECKPOINT_DIR is already created above
         stats_path = os.path.join(CHECKPOINT_DIR, "dataset_stats.pt")
         try:
             torch.save(dataset_stats, stats_path)
@@ -292,7 +306,7 @@ def main():
 
         # Save model checkpoint
         if (epoch + 1) % 10000 == 0 or (epoch + 1) == NUM_EPOCHS:
-            os.makedirs(CHECKPOINT_DIR, exist_ok=True) 
+            # Note: CHECKPOINT_DIR is already created above
             checkpoint_name = f"act_policy_epoch_{epoch+1}.pth"
             checkpoint_path = os.path.join(CHECKPOINT_DIR, checkpoint_name)
             torch.save(policy.state_dict(), checkpoint_path)
