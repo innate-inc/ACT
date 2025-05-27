@@ -3,6 +3,8 @@ import torch
 import os
 import argparse
 import numpy as np
+import datetime
+import subprocess
 
 # Assuming ACT.py is in the same directory or PYTHONPATH
 from ACT import ACTConfig, ACTPolicy
@@ -12,6 +14,20 @@ POLICY_QPOS_KEY = "observation.state"
 POLICY_IMG_KEY_1 = "observation.image_camera_1"
 POLICY_IMG_KEY_2 = "observation.image_camera_2"
 # POLICY_ACTION_KEY = "action" # Not used for select_action input
+
+
+def get_git_commit_hash():
+    try:
+        commit_hash = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+            )
+            .strip()
+            .decode("utf-8")
+        )
+        return commit_hash
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "nogit"
 
 
 def create_act_config_ros_style():
@@ -39,7 +55,8 @@ def create_act_config_ros_style():
         # IMPORTANT: Set to 7 based on previous errors with ckpt_vig.pth
         # The ROS script had 1, which caused 'Unexpected key(s)' error
         # with this specific checkpoint
-        # Updated based on combined errors: Missing beyond layer 3, Unexpected for layer 1 with n_dec=1
+        # Updated based on combined errors:
+        # Missing beyond layer 3, Unexpected for layer 1 with n_dec=1
         n_decoder_layers=4,
         use_vae=True,
         dropout=0.1,
@@ -114,72 +131,166 @@ def main(args):
     policy.eval()
     policy.reset()  # As per typical inference setup
 
-    # --- 4. Create Random Input Vector (Batch) - ROS Style (single step) ---
-    batch_size = 1  # ROS script processes one observation at a time
-    print(f"\\nCreating random input batch (bs={batch_size}, ROS-style single step):")
+    # --- Setup Logging ---
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    commit_hash = get_git_commit_hash()
+    log_dir = "benchmark_logs"
+    os.makedirs(log_dir, exist_ok=True)
+    log_filename = os.path.join(log_dir, f"{timestamp}_{commit_hash}_benchmark_log.txt")
+    print(f"Logging benchmark data to: {log_filename}")
 
-    qpos_dim = act_config.input_shapes[POLICY_QPOS_KEY][0]
-    action_dim_expected = act_config.output_shapes["action"][0]
+    with open(log_filename, "w") as log_file:
+        log_file.write(f"Benchmark Run: {timestamp}\n")
+        log_file.write(f"Git Commit: {commit_hash}\n")
+        log_file.write(f"Checkpoint: {checkpoint_full_path}\n\n")
 
-    img_c, img_h, img_w = 0, 0, 0
-    has_img1 = POLICY_IMG_KEY_1 in act_config.input_shapes
-    has_img2 = POLICY_IMG_KEY_2 in act_config.input_shapes
+        # --- 4. Create Standard Input Vector (Batch) - ROS Style (single step) ---
+        batch_size = 1  # ROS script processes one observation at a time
+        print_msg = (
+            f"\nCreating standard input batch (bs={batch_size}, "
+            f"ROS-style single step):"
+        )
+        print(print_msg)
+        log_file.write(f"{print_msg.strip()}\n")
 
-    if has_img1:
-        img_c, img_h, img_w = act_config.input_shapes[POLICY_IMG_KEY_1]
+        qpos_dim = act_config.input_shapes[POLICY_QPOS_KEY][0]
+        action_dim_expected = act_config.output_shapes["action"][0]
 
-    # Prepare observation batch
-    # IMPORTANT: ROS script feeds single, unsqueezed observations (batch_size, C, H, W) and (batch_size, D_qpos)
-    # This implies ACTPolicy's normalize_inputs and _prepare_batch_for_model handle this.
-    # The `n_obs_steps=1` in ACTConfig should align with this.
+        img_c, img_h, img_w = 0, 0, 0
+        has_img1 = POLICY_IMG_KEY_1 in act_config.input_shapes
+        has_img2 = POLICY_IMG_KEY_2 in act_config.input_shapes
 
-    # qpos: (batch_size, QPOS_DIM)
-    random_qpos_np = np.random.randn(batch_size, qpos_dim).astype(np.float32)
-    random_qpos = torch.tensor(random_qpos_np).to(device)
-    print(f"  {POLICY_QPOS_KEY} shape: {random_qpos.shape}")
+        if has_img1:
+            img_c, img_h, img_w = act_config.input_shapes[POLICY_IMG_KEY_1]
 
-    observation_batch = {POLICY_QPOS_KEY: random_qpos}
+        # Prepare observation batch
+        # IMPORTANT: ROS script feeds single, unsqueezed observations
+        # (batch_size, C, H, W) and (batch_size, D_qpos)
+        # This implies ACTPolicy's normalize_inputs and
+        # _prepare_batch_for_model handle this.
+        # The `n_obs_steps=1` in ACTConfig should align with this.
 
-    if has_img1 and img_c > 0:
-        img_shape = (batch_size, img_c, img_h, img_w)
-        random_img1_np = np.random.randn(*img_shape).astype(np.float32)
-        random_img1 = torch.tensor(random_img1_np).to(device)
-        print(f"  {POLICY_IMG_KEY_1} shape: {random_img1.shape}")
-        observation_batch[POLICY_IMG_KEY_1] = random_img1
+        # qpos: (batch_size, QPOS_DIM)
+        # Use np.ones for deterministic input, can be changed to other fixed values
+        standard_qpos_np = np.ones((batch_size, qpos_dim), dtype=np.float32)
+        standard_qpos = torch.tensor(standard_qpos_np).to(device)
+        print(f"  {POLICY_QPOS_KEY} shape: {standard_qpos.shape}")
+        print(f"  {POLICY_QPOS_KEY} sample value: {standard_qpos_np[0, :3]}")
+        log_file.write(f"  {POLICY_QPOS_KEY} shape: {standard_qpos.shape}\n")
+        log_file.write(
+            f"  {POLICY_QPOS_KEY} (first 3 values): "
+            f"{standard_qpos_np[0, :3].tolist()}\n"
+        )
 
-    if has_img2 and img_c > 0:  # Assuming img2 has same C,H,W as img1 if present
-        img_shape = (batch_size, img_c, img_h, img_w)
-        random_img2_np = np.random.randn(*img_shape).astype(np.float32)
-        random_img2 = torch.tensor(random_img2_np).to(device)
-        print(f"  {POLICY_IMG_KEY_2} shape: {random_img2.shape}")
-        observation_batch[POLICY_IMG_KEY_2] = random_img2
+        observation_batch = {POLICY_QPOS_KEY: standard_qpos}
 
-    # --- 5. Apply Model to Random Vector ---
-    print("\\nApplying model (policy.select_action) to random batch...")
-    try:
-        with torch.no_grad():
-            # policy.select_action is expected to handle this single-step batch
-            selected_action = policy.select_action(observation_batch)
-
-        print("\\n--- Model Output (Selected Action) ---")
-        action_np = selected_action.cpu().numpy()
-        # Squeeze batch dimension if present (ROS script does this)
-        if action_np.ndim > 1 and action_np.shape[0] == 1:
-            action_np = action_np.squeeze(0)
-
-        print(f"  Selected Action Shape (squeezed): {action_np.shape}")
-        print(f"  Selected Action Content: {action_np}")
-        if action_np.shape[-1] != action_dim_expected:
+        if has_img1 and img_c > 0:
+            img_shape = (batch_size, img_c, img_h, img_w)
+            # Use np.ones for deterministic input, can be changed
+            standard_img1_np = (
+                np.ones(img_shape, dtype=np.float32) * 0.5
+            )  # e.g. mid-range values
+            standard_img1 = torch.tensor(standard_img1_np).to(device)
+            print(f"  {POLICY_IMG_KEY_1} shape: {standard_img1.shape}")
+            # Print a small part of the image for verification
             print(
-                f"  WARNING: Action dim {action_np.shape[-1]}, expected {action_dim_expected}"
+                f"  {POLICY_IMG_KEY_1} sample value (first pixel, all channels): "
+                f"{standard_img1_np[0, :, 0, 0]}"
             )
-        print(f"  Selected Action Dtype: {selected_action.dtype}")
+            log_file.write(f"  {POLICY_IMG_KEY_1} shape: {standard_img1.shape}\n")
+            log_file.write(
+                f"  {POLICY_IMG_KEY_1} sample value "
+                f"(first pixel, all channels): "
+                f"{standard_img1_np[0, :, 0, 0].tolist()}\n"
+            )
+            observation_batch[POLICY_IMG_KEY_1] = standard_img1
 
-    except Exception as e:
-        print(f"Error during policy.select_action: {e}")
-        import traceback
+        if has_img2 and img_c > 0:  # Assuming img2 has same C,H,W as img1
+            img_shape = (batch_size, img_c, img_h, img_w)
+            # Use np.ones for deterministic input, can be changed
+            standard_img2_np = (
+                np.ones(img_shape, dtype=np.float32) * 0.7
+            )  # e.g. different mid-range values
+            standard_img2 = torch.tensor(standard_img2_np).to(device)
+            print(f"  {POLICY_IMG_KEY_2} shape: {standard_img2.shape}")
+            # Print a small part of the image for verification
+            print(
+                f"  {POLICY_IMG_KEY_2} sample value (first pixel, all channels): "
+                f"{standard_img2_np[0, :, 0, 0]}"
+            )
+            log_file.write(f"  {POLICY_IMG_KEY_2} shape: {standard_img2.shape}\n")
+            log_file.write(
+                f"  {POLICY_IMG_KEY_2} sample value "
+                f"(first pixel, all channels): "
+                f"{standard_img2_np[0, :, 0, 0].tolist()}\n"
+            )
+            observation_batch[POLICY_IMG_KEY_2] = standard_img2
 
-        traceback.print_exc()
+        log_file.write("\n--- Full Input Observation Batch (NumPy) ---\n")
+        for key, tensor_val in observation_batch.items():
+            log_file.write(f"Key: {key}\n")
+            # For brevity, log only a slice or summary of large image arrays
+            if "image" in key:
+                # Log a small slice e.g. first channel, 5x5 top-left corner
+                sample_slice = tensor_val.cpu().numpy()[0, 0, :5, :5]
+                log_file.write(f"  Shape: {tensor_val.shape}\n")
+                log_file.write(f"  Dtype: {tensor_val.dtype}\n")
+                log_file.write(f"  Sample Slice (e.g., [0,0,:5,:5]):\n{sample_slice}\n")
+            else:
+                log_file.write(f"  Value:\n{tensor_val.cpu().numpy()}\n")
+        log_file.write("\n")
+
+        # --- 5. Apply Model to Standard Vector ---
+        print_msg_model = "\nApplying model (policy.select_action) to standard batch..."
+        print(print_msg_model)
+        log_file.write(f"{print_msg_model.strip()}\n")
+        try:
+            with torch.no_grad():
+                selected_action = policy.select_action(observation_batch)
+
+            print_msg_output = "\n--- Model Output (Selected Action) ---"
+            print(print_msg_output)
+            log_file.write(f"{print_msg_output.strip()}\n")
+
+            action_np = selected_action.cpu().numpy()
+            if action_np.ndim > 1 and action_np.shape[0] == 1:
+                action_np_squeezed = action_np.squeeze(0)
+            else:
+                action_np_squeezed = action_np
+
+            print(f"  Selected Action Shape (squeezed): {action_np_squeezed.shape}")
+            print(f"  Selected Action Content: {action_np_squeezed}")
+            log_file.write(
+                f"  Selected Action Shape (original): {selected_action.shape}\n"
+            )
+            log_file.write(
+                f"  Selected Action Shape (squeezed): {action_np_squeezed.shape}\n"
+            )
+            log_file.write(
+                "  Selected Action Content (NumPy):\n"
+                f"{action_np_squeezed.tolist()}\n"
+            )
+
+            if action_np_squeezed.shape[-1] != action_dim_expected:
+                warning_msg = (
+                    f"  WARNING: Action dim {action_np_squeezed.shape[-1]}, "
+                    f"expected {action_dim_expected}"
+                )
+                print(warning_msg)
+                log_file.write(f"{warning_msg}\n")
+            print(f"  Selected Action Dtype: {selected_action.dtype}")
+            log_file.write(f"  Selected Action Dtype: {selected_action.dtype}\n")
+
+        except Exception as e:
+            error_msg = f"Error during policy.select_action: {e}"
+            print(error_msg)
+            log_file.write(f"{error_msg}\n")
+            import traceback
+
+            traceback.print_exc(file=log_file)
+            traceback.print_exc()
+
+    print(f"\nBenchmark data saved to {log_filename}")
 
 
 if __name__ == "__main__":
