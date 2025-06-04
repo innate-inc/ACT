@@ -222,6 +222,7 @@ class ACTConfig:
     n_obs_steps: int = 1
     chunk_size: int = 100
     n_action_steps: int = 100
+    speed: float = 1.0
     input_shapes: Dict[str, List[int]] = field(default_factory=dict)
     output_shapes: Dict[str, List[int]] = field(default_factory=dict)
     # Example: input_shapes = {"observation.image_rgb": [3, 224, 224], "observation.state": [7]}
@@ -324,9 +325,11 @@ class ACTPolicy(nn.Module):
         self.model = ACT(config)
         
         if config.temporal_ensemble_coeff is not None:
+            # Calculate effective chunk size after resampling
+            effective_chunk_size = int(config.chunk_size / config.speed)
             self.temporal_ensembler = ACTTemporalEnsembler(
                 config.temporal_ensemble_coeff, 
-                config.chunk_size
+                effective_chunk_size
             )
         
         self.reset()
@@ -399,6 +402,11 @@ class ACTPolicy(nn.Module):
         if self.config.temporal_ensemble_coeff is not None:
             actions_chunk_normalized = self.model(model_batch)[0] 
             actions_chunk = self.unnormalize_outputs({"action": actions_chunk_normalized})["action"]
+            
+            # Resample actions based on speed parameter
+            if self.config.speed != 1:
+                actions_chunk = self._resample_actions(actions_chunk, self.config.speed)
+            
             action = self.temporal_ensembler.update(actions_chunk)
             return action
 
@@ -406,9 +414,50 @@ class ACTPolicy(nn.Module):
             actions_chunk_normalized = self.model(model_batch)[0] 
             actions_to_queue_normalized = actions_chunk_normalized[:, :self.config.n_action_steps]
             actions_to_queue = self.unnormalize_outputs({"action": actions_to_queue_normalized})["action"]
+            
+            # Resample actions based on speed parameter
+            if self.config.speed != 1:
+                actions_to_queue = self._resample_actions(actions_to_queue, self.config.speed)
+            
             self._action_queue.extend(actions_to_queue.transpose(0, 1))
         
         return self._action_queue.popleft()
+
+    def _resample_actions(self, actions: Tensor, speed: float) -> Tensor:
+        """Linearly resample actions based on speed factor.
+        
+        Args:
+            actions: Input tensor of shape (batch, seq_len, action_dim)
+            speed: Speed factor. If > 1, downsample. If < 1, upsample. If = 1, no change.
+            
+        Returns:
+            Resampled actions tensor
+        """
+        batch_size, seq_len, action_dim = actions.shape
+        
+        new_seq_len = int(seq_len / speed)
+        
+        if new_seq_len == 0:
+            raise ValueError(f"Speed factor {speed} results in zero sequence length for input length {seq_len}")
+        
+        if new_seq_len == seq_len:
+            # No resampling needed
+            return actions
+        
+        # Use interpolate to linearly resample along the sequence dimension
+        # actions: (batch, seq_len, action_dim) -> (batch, action_dim, seq_len)
+        actions_transposed = actions.transpose(1, 2)
+        
+        # Interpolate along the last dimension (sequence)
+        resampled = F.interpolate(
+            actions_transposed, 
+            size=new_seq_len, 
+            mode='linear', 
+            align_corners=True
+        )
+        
+        # Transpose back: (batch, action_dim, new_seq_len) -> (batch, new_seq_len, action_dim)
+        return resampled.transpose(1, 2)
 
     def forward(self, batch: Dict[str, Tensor]) -> Tuple[Tensor, Dict]:
         # Create a working copy of the batch to avoid in-place modification
