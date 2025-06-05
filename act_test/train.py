@@ -202,6 +202,9 @@ def main():
     # Create infinite iterator from dataloader
     train_iter = iter(train_dataloader)
     
+    # Create persistent validation iterator
+    val_iter = iter(val_dataloader)
+    
     # Profiling variables
     batch_load_times = []
     forward_times = []
@@ -310,40 +313,51 @@ def main():
             )
 
         # --- Validation Step ---
-        if step % 10 == 0:  # Validate every 10 steps
+        if step % 100 == 0:  # Validate every 100 steps
+            val_start_time = time.time()
             policy.eval()
-            val_loss_sum = 0.0
-            val_l1_loss_sum = 0.0
-            val_kld_loss_sum = 0.0
-            val_batch_count = 0
             
             with torch.no_grad():
-                val_iter = iter(val_dataloader)
-                # Run validation for a fixed number of batches
-                for _ in range(50):  # Validate on 50 batches
-                    try:
-                        batch_val = next(val_iter)
-                        batch_device_val = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch_val.items()}
-                        loss, loss_dict = policy(batch_device_val)
-                        val_loss_sum += loss.item()
-                        val_l1_loss_sum += loss_dict.get("l1_loss", 0)
-                        val_kld_loss_sum += loss_dict.get("kld_loss", 0)
-                        val_batch_count += 1
-                    except StopIteration:
-                        break
-            
-            # Update validation metrics
-            if val_batch_count > 0:
-                latest_val_avg_loss = f"{(val_loss_sum / val_batch_count):.4f}"
-                latest_val_avg_l1_loss = f"{(val_l1_loss_sum / val_batch_count):.4f}"
-                latest_val_avg_kld_loss = f"{(val_kld_loss_sum / val_batch_count):.4f}"
+                try:
+                    # Time batch loading (no iterator creation needed)
+                    batch_load_start = time.time()
+                    batch_val = next(val_iter)
+                    batch_device_val = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch_val.items()}
+                    if device.type == 'cuda':
+                        torch.cuda.synchronize()
+                    batch_load_time = time.time() - batch_load_start
+                    
+                    # Time forward pass
+                    forward_start = time.time()
+                    loss, loss_dict = policy(batch_device_val)
+                    if device.type == 'cuda':
+                        torch.cuda.synchronize()
+                    forward_time = time.time() - forward_start
+                    
+                    # Single batch validation metrics
+                    latest_val_avg_loss = f"{loss.item():.4f}"
+                    latest_val_avg_l1_loss = f"{loss_dict.get('l1_loss', 0):.4f}"
+                    latest_val_avg_kld_loss = f"{loss_dict.get('kld_loss', 0):.4f}"
 
-                wandb.log({
-                    "val/avg_total_loss": float(latest_val_avg_loss),
-                    "val/avg_l1_loss": float(latest_val_avg_l1_loss),
-                    "val/avg_kld_loss": float(latest_val_avg_kld_loss),
-                    "step": step
-                })
+                    total_val_time = time.time() - val_start_time
+                    
+                    wandb.log({
+                        "val/avg_total_loss": loss.item(),
+                        "val/avg_l1_loss": loss_dict.get("l1_loss", 0),
+                        "val/avg_kld_loss": loss_dict.get("kld_loss", 0),
+                        "val_timing/batch_load_ms": batch_load_time * 1000,
+                        "val_timing/forward_ms": forward_time * 1000,
+                        "val_timing/total_val_ms": total_val_time * 1000,
+                        "step": step
+                    })
+                    
+                    overall_pbar.write(f"Validation at step {step}: Loss={loss.item():.4f}, "
+                                     f"Total={total_val_time*1000:.1f}ms (load={batch_load_time*1000:.1f}ms, forward={forward_time*1000:.1f}ms)")
+                    
+                except StopIteration:
+                    # Reset validation iterator when dataset is exhausted  
+                    val_iter = iter(val_dataloader)
+                    overall_pbar.write(f"Validation dataset exhausted at step {step}, resetting iterator")
 
         # Save model checkpoint
         if step % CHECKPOINT_INTERVAL == 0 or step == MAX_STEPS:
