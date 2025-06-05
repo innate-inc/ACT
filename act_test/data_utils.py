@@ -459,7 +459,7 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     
     # Create train dataset with WebDataset's built-in splitting
     train_dataset = (
-        wds.WebDataset(full_pattern)
+        wds.WebDataset(full_pattern, shardshuffle=True)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(lambda x: np.random.random() < train_val_split)
@@ -468,7 +468,7 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     
     # Create val dataset
     val_dataset = (
-        wds.WebDataset(full_pattern)
+        wds.WebDataset(full_pattern, shardshuffle=True)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(lambda x: np.random.random() >= train_val_split)
