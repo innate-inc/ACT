@@ -194,7 +194,7 @@ def train_ddp(rank, world_size, args):
     policy = ACTPolicy(config=act_config, dataset_stats=dataset_stats).to(device)
     
     # Wrap model with DDP
-    policy = DDP(policy, device_ids=[rank], output_device=rank, find_unused_parameters=True)
+    policy = DDP(policy, device_ids=[rank], output_device=rank, find_unused_parameters=False)
     
     optimizer = optim.AdamW(policy.module.get_optim_params(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 

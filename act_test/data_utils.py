@@ -400,6 +400,68 @@ class WebDatasetStreaming:
         )
         return dataset
 
+# Global picklable functions for WebDataset
+def train_split_filter(x, split_ratio=0.8):
+    """Picklable filter function for training split."""
+    return np.random.random() < split_ratio
+
+def val_split_filter(x, split_ratio=0.8):
+    """Picklable filter function for validation split."""
+    return np.random.random() >= split_ratio
+
+class WebDatasetDecoder:
+    """Picklable decoder class for WebDataset."""
+    
+    def __init__(self, chunk_size, use_img_aug):
+        self.chunk_size = chunk_size
+        self.use_img_aug = use_img_aug
+    
+    def __call__(self, sample_tuple):
+        """Decode a single sample from WebDataset and convert to ACT policy format."""
+        cam1, cam2, qpos, actions = sample_tuple
+        
+        # Convert images efficiently
+        cam1_array = np.asarray(cam1, dtype=np.float32)
+        cam2_array = np.asarray(cam2, dtype=np.float32)
+        
+        # Simple transforms for now
+        if self.use_img_aug:
+            # Basic augmentation without complex transforms
+            cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
+            cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
+            # Add simple random flip
+            if np.random.random() > 0.5:
+                cam1_tensor = torch.flip(cam1_tensor, dims=[2])
+                cam2_tensor = torch.flip(cam2_tensor, dims=[2])
+        else:
+            cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
+            cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
+        
+        # Handle action chunking and padding
+        original_length = len(actions)
+        
+        if original_length >= self.chunk_size:
+            # Take the first chunk_size actions (next actions from current obs)
+            padded_actions = actions[:self.chunk_size].astype(np.float32)
+            is_pad_array = np.zeros(self.chunk_size, dtype=bool)
+        else:
+            # Pad to chunk_size if we have fewer actions than needed
+            padded_actions = np.zeros((self.chunk_size, actions.shape[1]), dtype=np.float32)
+            padded_actions[:original_length] = actions.astype(np.float32)
+            is_pad_array = np.ones(self.chunk_size, dtype=bool)
+            is_pad_array[:original_length] = False
+        
+        # Convert to ACT policy expected format
+        sample = {
+            'observation.image_camera_1': cam1_tensor,  # (3, H, W)
+            'observation.image_camera_2': cam2_tensor,  # (3, H, W)
+            'observation.state': torch.from_numpy(qpos.astype(np.float32)),  # (6,)
+            'action': torch.from_numpy(padded_actions),  # (chunk_size, action_dim)
+            'action_is_pad': torch.from_numpy(is_pad_array)  # (chunk_size,)
+        }
+        
+        return sample
+
 def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8, 
                               train_val_split=0.8, use_img_aug_train=True, 
                               use_img_aug_val=False, num_workers=4, 
@@ -444,26 +506,23 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     
     print(f"Using dataset pattern: {full_pattern}")
     
-    # Create dataset handlers - same logic for both train and val
-    train_handler = WebDatasetStreaming(
-        dataset_path=full_pattern,
-        chunk_size=chunk_size,
-        use_img_aug=use_img_aug_train
-    )
+    # Create decode functions
+    train_decode_fn = WebDatasetDecoder(chunk_size, use_img_aug_train)
+    val_decode_fn = WebDatasetDecoder(chunk_size, use_img_aug_val)
     
-    val_handler = WebDatasetStreaming(
-        dataset_path=full_pattern,
-        chunk_size=chunk_size,
-        use_img_aug=use_img_aug_val
-    )
+    # Create train dataset with WebDataset's built-in splitting using functional approach
+    from functools import partial
     
-    # Create train dataset with WebDataset's built-in splitting
+    train_split_fn = partial(train_split_filter, split_ratio=train_val_split)
+    val_split_fn = partial(val_split_filter, split_ratio=train_val_split)
+    
+    # Create train dataset
     train_dataset = (
         wds.WebDataset(full_pattern, shardshuffle=True)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
-        .select(lambda x: np.random.random() < train_val_split)
-        .map(lambda x: train_handler.decode_sample(*x))
+        .select(train_split_fn)
+        .map(train_decode_fn)
     )
     
     # Create val dataset
@@ -471,8 +530,8 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
         wds.WebDataset(full_pattern, shardshuffle=True)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
-        .select(lambda x: np.random.random() >= train_val_split)
-        .map(lambda x: val_handler.decode_sample(*x))
+        .select(val_split_fn)
+        .map(val_decode_fn)
     )
     
     # Create dataloaders
