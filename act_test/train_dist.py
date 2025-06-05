@@ -76,10 +76,13 @@ def train_ddp(rank, world_size, args):
     USE_VAE = True
 
     # Training parameters
-    MAX_STEPS = 5000  # 20000 / 4
-    LEARNING_RATE = 1e-5
+    MAX_STEPS = 12000  # 20000 / 4
+    LEARNING_RATE = 1e-4
     WEIGHT_DECAY = 5e-4
     LEARNING_RATE_BACKBONE = 1e-5
+    
+    # Calculate checkpoint interval for exactly 10 checkpoints
+    CHECKPOINT_INTERVAL = MAX_STEPS // 10
 
     # W&B Configuration
     WANDB_PROJECT = "wandb_test_ddp"
@@ -347,7 +350,7 @@ def train_ddp(rank, world_size, args):
                 )
 
         # --- Validation Step (only on rank 0) ---
-        if step % 1000 == 0 and rank == 0:
+        if step % 10 == 0 and rank == 0:
             policy.eval()
             val_loss_sum = 0.0
             val_l1_loss_sum = 0.0
@@ -383,7 +386,7 @@ def train_ddp(rank, world_size, args):
                 })
 
         # Save model checkpoint (only on rank 0)
-        if (step % 10000 == 0 or step == MAX_STEPS) and rank == 0:
+        if (step % CHECKPOINT_INTERVAL == 0 or step == MAX_STEPS) and rank == 0:
             checkpoint_name = f"act_policy_step_{step}.pth"
             checkpoint_path = os.path.join(CHECKPOINT_DIR, checkpoint_name)
             torch.save(policy.module.state_dict(), checkpoint_path)
