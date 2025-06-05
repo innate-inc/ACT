@@ -58,11 +58,13 @@ KL_WEIGHT = 10.0 # If using VAE
 USE_VAE = True # Or False, depending on your choice
 
 # Training parameters
-MAX_STEPS = 20000  # Changed from NUM_EPOCHS to MAX_STEPS
+MAX_STEPS = 60000  # Changed from NUM_EPOCHS to MAX_STEPS
 LEARNING_RATE = 1e-5
 WEIGHT_DECAY = 5e-4
 LEARNING_RATE_BACKBONE = 1e-5
-#GRAD_CLIP_NORM = 1.0 # Optional gradient clipping
+
+# Calculate checkpoint interval for exactly 10 checkpoints
+CHECKPOINT_INTERVAL = MAX_STEPS // 10
 
 # W&B Configuration
 WANDB_PROJECT = "wandb_test"  # Changed from "act-simple"
@@ -308,7 +310,7 @@ def main():
             )
 
         # --- Validation Step ---
-        if step % 1000 == 0:  # Validate every 1000 steps
+        if step % 10 == 0:  # Validate every 10 steps
             policy.eval()
             val_loss_sum = 0.0
             val_l1_loss_sum = 0.0
@@ -344,7 +346,7 @@ def main():
                 })
 
         # Save model checkpoint
-        if step % 10000 == 0 or step == MAX_STEPS:
+        if step % CHECKPOINT_INTERVAL == 0 or step == MAX_STEPS:
             checkpoint_name = f"act_policy_step_{step}.pth"
             checkpoint_path = os.path.join(CHECKPOINT_DIR, checkpoint_name)
             torch.save(policy.state_dict(), checkpoint_path)
