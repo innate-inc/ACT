@@ -11,6 +11,11 @@ import json
 # If not, and use_img_aug=True with img_aug_transforms=None, a NameError/ImportError will occur.
 from torchvision.transforms import v2
 
+# Add WebDataset imports
+import webdataset as wds
+import glob
+from torchvision import transforms
+
 class EpisodicHDF5DatasetRAM(Dataset):
     # --- Hardcoded Values Based on User Guarantees ---
     ACTION_DIM = 8
@@ -295,4 +300,277 @@ def initialize_data(
     )
 
     return train_dataloader, val_dataloader, dataset_stats
+
+class WebDatasetStreaming:
+    """WebDataset implementation for ACT policy training with streaming data loading."""
+    
+    def __init__(self, dataset_path, chunk_size=100, use_img_aug=False):
+        self.dataset_path = dataset_path
+        self.chunk_size = chunk_size
+        self.use_img_aug = use_img_aug
+        
+        # Check if dataset files exist - handle WebDataset patterns properly
+        if "{" in dataset_path and "}" in dataset_path:
+            # For WebDataset patterns like train-{00000..00015}.tar, extract directory and check files
+            import re
+            # Extract the directory path
+            dir_path = os.path.dirname(dataset_path)
+            
+            # Check if it's a range pattern like {00000..00015}
+            range_match = re.search(r'\{(\d+)\.\.(\d+)\}', dataset_path)
+            if range_match:
+                start_num = int(range_match.group(1))
+                end_num = int(range_match.group(2))
+                # Check if files exist in the range
+                base_pattern = re.sub(r'\{.*\}', '*', dataset_path)
+                pattern_files = glob.glob(base_pattern)
+                
+                if len(pattern_files) == 0:
+                    raise FileNotFoundError(f"No WebDataset files found matching pattern: {base_pattern}")
+            else:
+                # For comma-separated patterns like {file1,file2,file3}
+                pattern_files = glob.glob(dataset_path.replace("{*}", "*"))
+                if len(pattern_files) == 0:
+                    raise FileNotFoundError(f"No WebDataset files found at: {dataset_path}")
+        else:
+            # Simple glob pattern
+            pattern_files = glob.glob(dataset_path)
+            if len(pattern_files) == 0:
+                raise FileNotFoundError(f"No WebDataset files found at: {dataset_path}")
+        
+        print(f"WebDataset pattern validated: {dataset_path}")
+        
+        # Image transforms
+        self.to_tensor = transforms.ToTensor()
+        if use_img_aug:
+            self.img_transform = transforms.Compose([
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                transforms.RandomRotation(degrees=5),
+                self.to_tensor
+            ])
+        else:
+            self.img_transform = self.to_tensor
+    
+    def decode_sample(self, cam1, cam2, qpos, actions):
+        """Decode a single sample from WebDataset and convert to ACT policy format."""
+        # Convert images efficiently
+        cam1_array = np.asarray(cam1, dtype=np.float32)
+        cam2_array = np.asarray(cam2, dtype=np.float32)
+        
+        # Apply transforms
+        if self.use_img_aug:
+            cam1_tensor = self.img_transform(cam1)
+            cam2_tensor = self.img_transform(cam2)
+        else:
+            cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
+            cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
+        
+        # Handle action chunking and padding
+        original_length = len(actions)
+        
+        if original_length >= self.chunk_size:
+            # Take the first chunk_size actions (next actions from current obs)
+            padded_actions = actions[:self.chunk_size].astype(np.float32)
+            is_pad_array = np.zeros(self.chunk_size, dtype=bool)
+        else:
+            # Pad to chunk_size if we have fewer actions than needed
+            padded_actions = np.zeros((self.chunk_size, actions.shape[1]), dtype=np.float32)
+            padded_actions[:original_length] = actions.astype(np.float32)
+            is_pad_array = np.ones(self.chunk_size, dtype=bool)
+            is_pad_array[:original_length] = False
+        
+        # Convert to ACT policy expected format
+        sample = {
+            'observation.image_camera_1': cam1_tensor,  # (3, H, W)
+            'observation.image_camera_2': cam2_tensor,  # (3, H, W)
+            'observation.state': torch.from_numpy(qpos.astype(np.float32)),  # (6,)
+            'action': torch.from_numpy(padded_actions),  # (chunk_size, action_dim)
+            'action_is_pad': torch.from_numpy(is_pad_array)  # (chunk_size,)
+        }
+        
+        return sample
+    
+    def create_webdataset(self):
+        """Create the WebDataset pipeline."""
+        dataset = (
+            wds.WebDataset(self.dataset_path)
+            .decode("pil")
+            .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
+            .map(lambda x: self.decode_sample(*x))
+        )
+        return dataset
+
+def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8, 
+                              train_val_split=0.8, use_img_aug_train=True, 
+                              use_img_aug_val=False, num_workers=4, 
+                              prefetch_factor=2, seed=42):
+    """
+    Initialize WebDataset-based training and validation dataloaders.
+    Uses WebDataset's built-in splitting mechanism.
+    """
+    
+    # Set random seed for reproducible splits
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    
+    # Find all .tar files and create pattern
+    dataset_pattern = os.path.join(data_dir, "train-*.tar")
+    all_files = sorted(glob.glob(dataset_pattern))
+    
+    if len(all_files) == 0:
+        raise FileNotFoundError(f"No WebDataset .tar files found in {data_dir}")
+    
+    print(f"Found {len(all_files)} WebDataset files")
+    
+    # Create pattern for all files
+    if len(all_files) == 1:
+        full_pattern = all_files[0]
+    else:
+        # Create webdataset range pattern
+        import re
+        first_file = all_files[0]
+        last_file = all_files[-1]
+        
+        match_first = re.search(r'train-(\d+)\.tar', first_file)
+        match_last = re.search(r'train-(\d+)\.tar', last_file)
+        
+        if match_first and match_last:
+            start_num = int(match_first.group(1))
+            end_num = int(match_last.group(1))
+            base_path = first_file.replace(match_first.group(0), "train-{%05d..%05d}.tar" % (start_num, end_num))
+            full_pattern = base_path
+        else:
+            full_pattern = "{" + ",".join(all_files) + "}"
+    
+    print(f"Using dataset pattern: {full_pattern}")
+    
+    # Create dataset handlers - same logic for both train and val
+    train_handler = WebDatasetStreaming(
+        dataset_path=full_pattern,
+        chunk_size=chunk_size,
+        use_img_aug=use_img_aug_train
+    )
+    
+    val_handler = WebDatasetStreaming(
+        dataset_path=full_pattern,
+        chunk_size=chunk_size,
+        use_img_aug=use_img_aug_val
+    )
+    
+    # Create train dataset with WebDataset's built-in splitting
+    train_dataset = (
+        wds.WebDataset(full_pattern)
+        .decode("pil")
+        .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
+        .select(lambda x: np.random.random() < train_val_split)
+        .map(lambda x: train_handler.decode_sample(*x))
+    )
+    
+    # Create val dataset
+    val_dataset = (
+        wds.WebDataset(full_pattern)
+        .decode("pil")
+        .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
+        .select(lambda x: np.random.random() >= train_val_split)
+        .map(lambda x: val_handler.decode_sample(*x))
+    )
+    
+    # Create dataloaders
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=prefetch_factor if num_workers > 0 else 2,
+        drop_last=True
+    )
+    
+    val_dataloader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=prefetch_factor if num_workers > 0 else 2,
+        drop_last=False
+    )
+    
+    # Calculate dataset statistics from training data
+    print("Calculating dataset statistics...")
+    dataset_stats = calculate_webdataset_stats(train_dataloader, max_samples=1000)
+    
+    return train_dataloader, val_dataloader, dataset_stats
+
+def calculate_webdataset_stats(dataloader, max_samples=1000):
+    """Calculate dataset statistics from WebDataset dataloader."""
+    print(f"Computing dataset statistics from up to {max_samples} samples...")
+    
+    all_qpos = []
+    all_actions = []
+    
+    sample_count = 0
+    for batch in dataloader:
+        batch_size = batch['observation.state'].shape[0]
+        
+        # Collect qpos data
+        qpos_batch = batch['observation.state']  # (B, qpos_dim)
+        all_qpos.append(qpos_batch)
+        
+        # Collect action data (excluding padded actions)
+        actions_batch = batch['action']  # (B, chunk_size, action_dim)
+        is_pad_batch = batch['action_is_pad']  # (B, chunk_size)
+        
+        # Only use non-padded actions for statistics
+        for i in range(batch_size):
+            real_actions = actions_batch[i][~is_pad_batch[i]]  # (real_length, action_dim)
+            if len(real_actions) > 0:
+                all_actions.append(real_actions)
+        
+        sample_count += batch_size
+        if sample_count >= max_samples:
+            break
+    
+    # Compute statistics for qpos and actions
+    all_qpos = torch.cat(all_qpos, dim=0)  # (N, qpos_dim)
+    all_actions = torch.cat(all_actions, dim=0)  # (M, action_dim)
+    
+    # Compute qpos statistics
+    qpos_mean = all_qpos.mean(dim=0)
+    qpos_std = all_qpos.std(dim=0)
+    
+    # Compute action statistics
+    action_mean = all_actions.mean(dim=0)
+    action_std = all_actions.std(dim=0)
+    
+    # Ensure std is not zero (add small epsilon if needed)
+    qpos_std = torch.clamp(qpos_std, min=1e-6)
+    action_std = torch.clamp(action_std, min=1e-6)
+    
+    # Use standard ImageNet statistics for images (images are already /255 normalized)
+    imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).reshape(-1, 1, 1)  # (3, 1, 1)
+    imagenet_std = torch.tensor([0.229, 0.224, 0.225]).reshape(-1, 1, 1)   # (3, 1, 1)
+    
+    dataset_stats = {
+        'observation.state': {
+            'mean': qpos_mean,
+            'std': qpos_std
+        },
+        'action': {
+            'mean': action_mean,
+            'std': action_std
+        },
+        'observation.image_camera_1': {
+            'mean': imagenet_mean,
+            'std': imagenet_std
+        },
+        'observation.image_camera_2': {
+            'mean': imagenet_mean,
+            'std': imagenet_std
+        }
+    }
+    
+    print(f"Computed statistics from {len(all_qpos)} qpos samples and {len(all_actions)} action samples")
+    print("Using ImageNet statistics for image normalization")
+    return dataset_stats
 
