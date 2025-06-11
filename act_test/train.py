@@ -64,7 +64,7 @@ LEARNING_RATE_BACKBONE = 1e-5
 #GRAD_CLIP_NORM = 1.0 # Optional gradient clipping
 
 # W&B Configuration
-WANDB_PROJECT = "learned_termination"  # Fixed project name
+WANDB_PROJECT = "act-simple"  # Fixed project name
 WANDB_ENTITY = None # Replace with your W&B username or team name if desired
 
 # Your W&B API Key
