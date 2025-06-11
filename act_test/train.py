@@ -11,7 +11,7 @@ from data_utils import initialize_data # Assuming data_utils.py is in the same d
 
 # --- Configuration ---
 # Data parameters
-DATA_DIR = "/home/vignesh/raid/PaperCorner_Filtered" # Replace with your actual data directory
+DATA_DIR = "/home/vignesh/raid/Socks_1_2_3_terminated" # Replace with your actual data directory
 CHUNK_SIZE = 30
 TRAIN_VAL_SPLIT = 0.9
 BATCH_SIZE = 32 # Adjust based on your GPU memory
@@ -33,7 +33,7 @@ IMAGE_H = 480 # From data_utils.py
 IMAGE_W = 640 # From data_utils.py
 IMAGE_C = 3   # From data_utils.py
 QPOS_DIM = 6  # From data_utils.py (State dimension)
-ACTION_DIM = 8 # From data_utils.py
+ACTION_DIM = 10 # From data_utils.py
 
 # Define input_shapes based on your data_utils.py and dataset structure
 # This is a critical part and needs to be accurate.
