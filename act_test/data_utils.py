@@ -36,17 +36,10 @@ class EpisodicHDF5DatasetRAM(Dataset):
     def __init__(self,
                  data_dir: str,
                  episode_ids: List[int],
-                 chunk_size: int,
-                 use_img_aug: bool = False,
-                 img_aug_transforms: Optional[torch.nn.Module] = None):
+                 chunk_size: int):
         super().__init__()
         self.data_dir = data_dir
         self.chunk_size = chunk_size
-        self.use_img_aug = use_img_aug
-        self.transforms = img_aug_transforms
-
-        if self.use_img_aug and self.transforms is None:
-            self.transforms = v2.Compose([v2.RandomPhotometricDistort(p=0.5), v2.RandomHorizontalFlip(p=0.5)])
 
         self.loaded_episodes_data: List[Dict[str, Any]] = []
         self.episode_info: List[Dict[str, Any]] = []
@@ -164,20 +157,10 @@ class EpisodicHDF5DatasetRAM(Dataset):
 
         item[self.POLICY_QPOS_KEY] = ep_data[self.POLICY_QPOS_KEY][start_ts]
 
-        images_to_augment = []
-        policy_keys_for_img_aug = []
         for i, _ in enumerate(self.H5_CAMERA_NAMES): 
             policy_img_key = self.POLICY_IMG_KEYS[i]
             img_chw = ep_data[policy_img_key][start_ts] 
-            if self.use_img_aug and self.transforms:
-                images_to_augment.append(img_chw)
-                policy_keys_for_img_aug.append(policy_img_key)
-            else:
-                item[policy_img_key] = img_chw
-
-        if self.use_img_aug and self.transforms and images_to_augment:
-            for i, img_to_aug in enumerate(images_to_augment):
-                item[policy_keys_for_img_aug[i]] = self.transforms(img_to_aug)
+            item[policy_img_key] = img_chw
         
         return item
 
@@ -187,10 +170,6 @@ def initialize_data(
     train_val_split: float = 0.9,
     batch_size: int = 32,
     num_workers: int = 0,
-    use_img_aug_train: bool = False,
-    use_img_aug_val: bool = False,
-    img_aug_transforms_train: Optional[torch.nn.Module] = None,
-    img_aug_transforms_val: Optional[torch.nn.Module] = None,
     seed: Optional[int] = None
 ) -> Tuple[DataLoader, DataLoader, Dict[str, Dict[str, torch.Tensor]]]:
     """
@@ -202,13 +181,6 @@ def initialize_data(
         train_val_split: Fraction of episodes to use for training (0.0 to 1.0).
         batch_size: Batch size for the DataLoaders.
         num_workers: Number of worker processes for data loading. Defaults to 0.
-        use_img_aug_train: Whether to use image augmentation for the training set.
-        use_img_aug_val: Whether to use image augmentation for the validation set.
-                       (Typically False for validation).
-        img_aug_transforms_train: Custom torchvision transforms for training images.
-                                  If None and use_img_aug_train is True, default is used.
-        img_aug_transforms_val: Custom torchvision transforms for validation images.
-                                If None and use_img_aug_val is True, default is used.
         seed: Optional random seed for reproducible train/val split.
 
     Returns:
@@ -262,22 +234,17 @@ def initialize_data(
     train_dataset = EpisodicHDF5DatasetRAM(
         data_dir=data_dir,
         episode_ids=train_episode_ids,
-        chunk_size=chunk_size,
-        use_img_aug=use_img_aug_train,
-        img_aug_transforms=img_aug_transforms_train
+        chunk_size=chunk_size
     )
 
     # Compute stats from the training dataset
     dataset_stats = train_dataset.get_dataset_stats()
 
     # Create validation dataset
-    # Handles val_episode_ids being empty, resulting in an empty dataset
     val_dataset = EpisodicHDF5DatasetRAM(
         data_dir=data_dir,
         episode_ids=val_episode_ids, 
-        chunk_size=chunk_size,
-        use_img_aug=use_img_aug_val,
-        img_aug_transforms=img_aug_transforms_val
+        chunk_size=chunk_size
     )
 
     train_dataloader = DataLoader(
@@ -304,10 +271,9 @@ def initialize_data(
 class WebDatasetStreaming:
     """WebDataset implementation for ACT policy training with streaming data loading."""
     
-    def __init__(self, dataset_path, chunk_size=100, use_img_aug=False):
+    def __init__(self, dataset_path, chunk_size=100):
         self.dataset_path = dataset_path
         self.chunk_size = chunk_size
-        self.use_img_aug = use_img_aug
         
         # Check if dataset files exist - handle WebDataset patterns properly
         if "{" in dataset_path and "}" in dataset_path:
@@ -339,31 +305,15 @@ class WebDatasetStreaming:
                 raise FileNotFoundError(f"No WebDataset files found at: {dataset_path}")
         
         print(f"WebDataset pattern validated: {dataset_path}")
-        
-        # Image transforms
-        self.to_tensor = transforms.ToTensor()
-        if use_img_aug:
-            self.img_transform = transforms.Compose([
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-                transforms.RandomRotation(degrees=5),
-                self.to_tensor
-            ])
-        else:
-            self.img_transform = self.to_tensor
     
     def decode_sample(self, cam1, cam2, qpos, actions):
         """Decode a single sample from WebDataset and convert to ACT policy format."""
-        # Convert images efficiently
+        # Convert images efficiently - no augmentation
         cam1_array = np.asarray(cam1, dtype=np.float32)
         cam2_array = np.asarray(cam2, dtype=np.float32)
         
-        # Apply transforms
-        if self.use_img_aug:
-            cam1_tensor = self.img_transform(cam1)
-            cam2_tensor = self.img_transform(cam2)
-        else:
-            cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
-            cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
+        cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
+        cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
         
         # Handle action chunking and padding
         original_length = len(actions)
@@ -412,30 +362,19 @@ def val_split_filter(x, split_ratio=0.8):
 class WebDatasetDecoder:
     """Picklable decoder class for WebDataset."""
     
-    def __init__(self, chunk_size, use_img_aug):
+    def __init__(self, chunk_size):
         self.chunk_size = chunk_size
-        self.use_img_aug = use_img_aug
     
     def __call__(self, sample_tuple):
         """Decode a single sample from WebDataset and convert to ACT policy format."""
         cam1, cam2, qpos, actions = sample_tuple
         
-        # Convert images efficiently
+        # Convert images efficiently - no augmentation
         cam1_array = np.asarray(cam1, dtype=np.float32)
         cam2_array = np.asarray(cam2, dtype=np.float32)
         
-        # Simple transforms for now
-        if self.use_img_aug:
-            # Basic augmentation without complex transforms
-            cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
-            cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
-            # Add simple random flip
-            if np.random.random() > 0.5:
-                cam1_tensor = torch.flip(cam1_tensor, dims=[2])
-                cam2_tensor = torch.flip(cam2_tensor, dims=[2])
-        else:
-            cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
-            cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
+        cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
+        cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
         
         # Handle action chunking and padding
         original_length = len(actions)
@@ -463,8 +402,7 @@ class WebDatasetDecoder:
         return sample
 
 def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8, 
-                              train_val_split=0.8, use_img_aug_train=True, 
-                              use_img_aug_val=False, num_workers=4, 
+                              train_val_split=0.8, num_workers=4, 
                               prefetch_factor=2, seed=42):
     """
     Initialize WebDataset-based training and validation dataloaders.
@@ -506,11 +444,10 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     
     print(f"Using dataset pattern: {full_pattern}")
     
-    # Create decode functions
-    train_decode_fn = WebDatasetDecoder(chunk_size, use_img_aug_train)
-    val_decode_fn = WebDatasetDecoder(chunk_size, use_img_aug_val)
+    # Create decode functions - no augmentation parameters
+    decode_fn = WebDatasetDecoder(chunk_size)
     
-    # Create train dataset with WebDataset's built-in splitting using functional approach
+    # Create split functions using functional approach
     from functools import partial
     
     train_split_fn = partial(train_split_filter, split_ratio=train_val_split)
@@ -522,7 +459,7 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(train_split_fn)
-        .map(train_decode_fn)
+        .map(decode_fn)
     )
     
     # Create val dataset
@@ -531,7 +468,7 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(val_split_fn)
-        .map(val_decode_fn)
+        .map(decode_fn)
     )
     
     # Create dataloaders
@@ -627,6 +564,7 @@ def calculate_webdataset_stats(dataloader, max_samples=1000):
             'mean': imagenet_mean,
             'std': imagenet_std
         }
+
     }
     
     print(f"Computed statistics from {len(all_qpos)} qpos samples and {len(all_actions)} action samples")
