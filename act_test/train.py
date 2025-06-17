@@ -129,8 +129,6 @@ def main():
             chunk_size=CHUNK_SIZE,
             batch_size=BATCH_SIZE,
             train_val_split=TRAIN_VAL_SPLIT,
-            use_img_aug_train=USE_IMG_AUG_TRAIN,
-            use_img_aug_val=USE_IMG_AUG_VAL,
             num_workers=NUM_WORKERS,
             prefetch_factor=2,  # WebDataset-specific parameter
             seed=42 # for reproducibility

@@ -6,6 +6,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import List, Dict, Any, Optional, Tuple
 import json
+import time
+from tqdm import tqdm
 
 # Assuming torchvision.transforms.v2 will be available if default augmentation is used.
 # If not, and use_img_aug=True with img_aug_transforms=None, a NameError/ImportError will occur.
@@ -15,6 +17,8 @@ from torchvision.transforms import v2
 import webdataset as wds
 import glob
 from torchvision import transforms
+from functools import partial
+import re
 
 class EpisodicHDF5DatasetRAM(Dataset):
     # --- Hardcoded Values Based on User Guarantees ---
@@ -278,8 +282,6 @@ class WebDatasetStreaming:
         # Check if dataset files exist - handle WebDataset patterns properly
         if "{" in dataset_path and "}" in dataset_path:
             # For WebDataset patterns like train-{00000..00015}.tar, extract directory and check files
-            import re
-            # Extract the directory path
             dir_path = os.path.dirname(dataset_path)
             
             # Check if it's a range pattern like {00000..00015}
@@ -402,97 +404,122 @@ class WebDatasetDecoder:
         return sample
 
 def calculate_webdataset_stats(dataloader, max_samples=None):
-    """
-    Calculate dataset statistics from WebDataset dataloader.
-    
-    Args:
-        dataloader: WebDataset dataloader
-        max_samples: Maximum number of samples to use for statistics calculation.
-                    If None, uses all available samples.
-    """
+    """Calculate dataset statistics from WebDataset dataloader using online computation."""
     if max_samples is None:
         print("Computing dataset statistics from ALL samples...")
     else:
         print(f"Computing dataset statistics from up to {max_samples} samples...")
     
-    all_qpos = []
-    all_actions = []
-    all_cam1_images = []
-    all_cam2_images = []
+    # Online statistics accumulators
+    qpos_sum = None
+    qpos_sum_sq = None
+    qpos_count = 0
+    
+    action_sum = None
+    action_sum_sq = None
+    action_count = 0
+    
+    cam1_sum = None
+    cam1_sum_sq = None
+    cam1_count = 0
+    
+    cam2_sum = None
+    cam2_sum_sq = None
+    cam2_count = 0
     
     sample_count = 0
-    batch_count = 0
     
-    for batch in dataloader:
+    # Wrap the dataloader with tqdm
+    pbar = tqdm(dataloader, desc="Computing stats", unit="batch")
+    
+    for batch in pbar:
         batch_size = batch['observation.state'].shape[0]
         
-        # Collect qpos data
+        # Process qpos data
         qpos_batch = batch['observation.state']  # (B, qpos_dim)
-        all_qpos.append(qpos_batch)
+        if qpos_sum is None:
+            qpos_sum = torch.zeros_like(qpos_batch[0])
+            qpos_sum_sq = torch.zeros_like(qpos_batch[0])
         
-        # Collect action data (excluding padded actions)
+        qpos_sum += qpos_batch.sum(dim=0)
+        qpos_sum_sq += (qpos_batch ** 2).sum(dim=0)
+        qpos_count += batch_size
+        
+        # Process action data (excluding padded actions)
         actions_batch = batch['action']  # (B, chunk_size, action_dim)
         is_pad_batch = batch['action_is_pad']  # (B, chunk_size)
         
-        # Only use non-padded actions for statistics
         for i in range(batch_size):
             real_actions = actions_batch[i][~is_pad_batch[i]]  # (real_length, action_dim)
             if len(real_actions) > 0:
-                all_actions.append(real_actions)
+                if action_sum is None:
+                    action_sum = torch.zeros_like(real_actions[0])
+                    action_sum_sq = torch.zeros_like(real_actions[0])
+                
+                action_sum += real_actions.sum(dim=0)
+                action_sum_sq += (real_actions ** 2).sum(dim=0)
+                action_count += len(real_actions)
         
-        # Collect image data for both cameras
+        # Process camera 1 images
         cam1_batch = batch['observation.image_camera_1']  # (B, 3, H, W)
+        if cam1_sum is None:
+            cam1_sum = torch.zeros(cam1_batch.shape[1])  # (3,)
+            cam1_sum_sq = torch.zeros(cam1_batch.shape[1])  # (3,)
+        
+        # Sum over batch, height, width dimensions
+        cam1_batch_flat = cam1_batch.view(batch_size, cam1_batch.shape[1], -1)  # (B, 3, H*W)
+        cam1_sum += cam1_batch_flat.sum(dim=(0, 2))  # Sum over batch and spatial
+        cam1_sum_sq += (cam1_batch_flat ** 2).sum(dim=(0, 2))
+        cam1_count += batch_size * cam1_batch.shape[2] * cam1_batch.shape[3]  # B * H * W
+        
+        # Process camera 2 images
         cam2_batch = batch['observation.image_camera_2']  # (B, 3, H, W)
-        all_cam1_images.append(cam1_batch)
-        all_cam2_images.append(cam2_batch)
+        if cam2_sum is None:
+            cam2_sum = torch.zeros(cam2_batch.shape[1])  # (3,)
+            cam2_sum_sq = torch.zeros(cam2_batch.shape[1])  # (3,)
+        
+        cam2_batch_flat = cam2_batch.view(batch_size, cam2_batch.shape[1], -1)
+        cam2_sum += cam2_batch_flat.sum(dim=(0, 2))
+        cam2_sum_sq += (cam2_batch_flat ** 2).sum(dim=(0, 2))
+        cam2_count += batch_size * cam2_batch.shape[2] * cam2_batch.shape[3]
         
         sample_count += batch_size
-        batch_count += 1
         
-        # Print progress every 100 batches
-        if batch_count % 100 == 0:
-            print(f"Processed {batch_count} batches, {sample_count} samples...")
+        # Update progress bar
+        pbar.set_postfix({
+            'samples': sample_count,
+            'batch_size': batch_size
+        })
         
         # Break if we've reached max_samples
         if max_samples is not None and sample_count >= max_samples:
             break
     
-    print(f"Finished processing {batch_count} batches, {sample_count} total samples")
+    pbar.close()
     
-    # Compute statistics for qpos and actions
-    all_qpos = torch.cat(all_qpos, dim=0)  # (N, qpos_dim)
-    all_actions = torch.cat(all_actions, dim=0)  # (M, action_dim)
+    # Compute final statistics using online formulas
+    # mean = sum / count
+    # var = (sum_sq / count) - (mean ** 2)
+    # std = sqrt(var)
     
-    # Compute statistics for images
-    all_cam1_images = torch.cat(all_cam1_images, dim=0)  # (N, 3, H, W)
-    all_cam2_images = torch.cat(all_cam2_images, dim=0)  # (N, 3, H, W)
+    # QPos statistics
+    qpos_mean = qpos_sum / qpos_count
+    qpos_var = (qpos_sum_sq / qpos_count) - (qpos_mean ** 2)
+    qpos_std = torch.clamp(torch.sqrt(qpos_var), min=1e-6)
     
-    print(f"Computing statistics from:")
-    print(f"  - {len(all_qpos)} qpos samples")
-    print(f"  - {len(all_actions)} action samples") 
-    print(f"  - {len(all_cam1_images)} camera 1 images")
-    print(f"  - {len(all_cam2_images)} camera 2 images")
+    # Action statistics
+    action_mean = action_sum / action_count
+    action_var = (action_sum_sq / action_count) - (action_mean ** 2)
+    action_std = torch.clamp(torch.sqrt(action_var), min=1e-6)
     
-    # Compute qpos statistics
-    qpos_mean = all_qpos.mean(dim=0)
-    qpos_std = all_qpos.std(dim=0)
+    # Camera statistics
+    cam1_mean = (cam1_sum / cam1_count).reshape(-1, 1, 1)  # (3, 1, 1)
+    cam1_var = (cam1_sum_sq / cam1_count) - (cam1_sum / cam1_count) ** 2
+    cam1_std = torch.clamp(torch.sqrt(cam1_var), min=1e-6).reshape(-1, 1, 1)
     
-    # Compute action statistics
-    action_mean = all_actions.mean(dim=0)
-    action_std = all_actions.std(dim=0)
-    
-    # Compute image statistics (per-channel across spatial dimensions)
-    cam1_mean = torch.mean(all_cam1_images, dim=(0, 2, 3)).reshape(-1, 1, 1)  # (3, 1, 1)
-    cam1_std = torch.std(all_cam1_images, dim=(0, 2, 3)).reshape(-1, 1, 1)    # (3, 1, 1)
-    
-    cam2_mean = torch.mean(all_cam2_images, dim=(0, 2, 3)).reshape(-1, 1, 1)  # (3, 1, 1)
-    cam2_std = torch.std(all_cam2_images, dim=(0, 2, 3)).reshape(-1, 1, 1)    # (3, 1, 1)
-    
-    # Ensure std is not zero (add small epsilon if needed)
-    qpos_std = torch.clamp(qpos_std, min=1e-6)
-    action_std = torch.clamp(action_std, min=1e-6)
-    cam1_std = torch.clamp(cam1_std, min=1e-6)
-    cam2_std = torch.clamp(cam2_std, min=1e-6)
+    cam2_mean = (cam2_sum / cam2_count).reshape(-1, 1, 1)  # (3, 1, 1)
+    cam2_var = (cam2_sum_sq / cam2_count) - (cam2_sum / cam2_count) ** 2
+    cam2_std = torch.clamp(torch.sqrt(cam2_var), min=1e-6).reshape(-1, 1, 1)
     
     dataset_stats = {
         'observation.state': {
@@ -514,8 +541,7 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
     }
     
     print("Dataset statistics computed successfully!")
-    print(f"Camera 1 - Mean: {cam1_mean.flatten()}, Std: {cam1_std.flatten()}")
-    print(f"Camera 2 - Mean: {cam2_mean.flatten()}, Std: {cam2_std.flatten()}")
+    print(f"Processed {sample_count} samples, {qpos_count} qpos, {action_count} actions")
     
     return dataset_stats
 
@@ -525,16 +551,6 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     """
     Initialize WebDataset-based training and validation dataloaders.
     Uses WebDataset's built-in splitting mechanism.
-    
-    Args:
-        data_dir: Directory containing WebDataset .tar files
-        chunk_size: Action sequence chunk size
-        batch_size: Batch size for dataloaders
-        train_val_split: Fraction of data for training
-        num_workers: Number of worker processes
-        prefetch_factor: Prefetch factor for dataloader
-        seed: Random seed for reproducibility
-        compute_stats_from_all: If True, compute stats from all samples. If False, use max 1000 samples.
     """
     
     # Set random seed for reproducible splits
@@ -555,7 +571,6 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
         full_pattern = all_files[0]
     else:
         # Create webdataset range pattern
-        import re
         first_file = all_files[0]
         last_file = all_files[-1]
         
@@ -576,8 +591,6 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     decode_fn = WebDatasetDecoder(chunk_size)
     
     # Create split functions using functional approach
-    from functools import partial
-    
     train_split_fn = partial(train_split_filter, split_ratio=train_val_split)
     val_split_fn = partial(val_split_filter, split_ratio=train_val_split)
     
