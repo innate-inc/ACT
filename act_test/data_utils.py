@@ -401,12 +401,140 @@ class WebDatasetDecoder:
         
         return sample
 
+def calculate_webdataset_stats(dataloader, max_samples=None):
+    """
+    Calculate dataset statistics from WebDataset dataloader.
+    
+    Args:
+        dataloader: WebDataset dataloader
+        max_samples: Maximum number of samples to use for statistics calculation.
+                    If None, uses all available samples.
+    """
+    if max_samples is None:
+        print("Computing dataset statistics from ALL samples...")
+    else:
+        print(f"Computing dataset statistics from up to {max_samples} samples...")
+    
+    all_qpos = []
+    all_actions = []
+    all_cam1_images = []
+    all_cam2_images = []
+    
+    sample_count = 0
+    batch_count = 0
+    
+    for batch in dataloader:
+        batch_size = batch['observation.state'].shape[0]
+        
+        # Collect qpos data
+        qpos_batch = batch['observation.state']  # (B, qpos_dim)
+        all_qpos.append(qpos_batch)
+        
+        # Collect action data (excluding padded actions)
+        actions_batch = batch['action']  # (B, chunk_size, action_dim)
+        is_pad_batch = batch['action_is_pad']  # (B, chunk_size)
+        
+        # Only use non-padded actions for statistics
+        for i in range(batch_size):
+            real_actions = actions_batch[i][~is_pad_batch[i]]  # (real_length, action_dim)
+            if len(real_actions) > 0:
+                all_actions.append(real_actions)
+        
+        # Collect image data for both cameras
+        cam1_batch = batch['observation.image_camera_1']  # (B, 3, H, W)
+        cam2_batch = batch['observation.image_camera_2']  # (B, 3, H, W)
+        all_cam1_images.append(cam1_batch)
+        all_cam2_images.append(cam2_batch)
+        
+        sample_count += batch_size
+        batch_count += 1
+        
+        # Print progress every 100 batches
+        if batch_count % 100 == 0:
+            print(f"Processed {batch_count} batches, {sample_count} samples...")
+        
+        # Break if we've reached max_samples
+        if max_samples is not None and sample_count >= max_samples:
+            break
+    
+    print(f"Finished processing {batch_count} batches, {sample_count} total samples")
+    
+    # Compute statistics for qpos and actions
+    all_qpos = torch.cat(all_qpos, dim=0)  # (N, qpos_dim)
+    all_actions = torch.cat(all_actions, dim=0)  # (M, action_dim)
+    
+    # Compute statistics for images
+    all_cam1_images = torch.cat(all_cam1_images, dim=0)  # (N, 3, H, W)
+    all_cam2_images = torch.cat(all_cam2_images, dim=0)  # (N, 3, H, W)
+    
+    print(f"Computing statistics from:")
+    print(f"  - {len(all_qpos)} qpos samples")
+    print(f"  - {len(all_actions)} action samples") 
+    print(f"  - {len(all_cam1_images)} camera 1 images")
+    print(f"  - {len(all_cam2_images)} camera 2 images")
+    
+    # Compute qpos statistics
+    qpos_mean = all_qpos.mean(dim=0)
+    qpos_std = all_qpos.std(dim=0)
+    
+    # Compute action statistics
+    action_mean = all_actions.mean(dim=0)
+    action_std = all_actions.std(dim=0)
+    
+    # Compute image statistics (per-channel across spatial dimensions)
+    cam1_mean = torch.mean(all_cam1_images, dim=(0, 2, 3)).reshape(-1, 1, 1)  # (3, 1, 1)
+    cam1_std = torch.std(all_cam1_images, dim=(0, 2, 3)).reshape(-1, 1, 1)    # (3, 1, 1)
+    
+    cam2_mean = torch.mean(all_cam2_images, dim=(0, 2, 3)).reshape(-1, 1, 1)  # (3, 1, 1)
+    cam2_std = torch.std(all_cam2_images, dim=(0, 2, 3)).reshape(-1, 1, 1)    # (3, 1, 1)
+    
+    # Ensure std is not zero (add small epsilon if needed)
+    qpos_std = torch.clamp(qpos_std, min=1e-6)
+    action_std = torch.clamp(action_std, min=1e-6)
+    cam1_std = torch.clamp(cam1_std, min=1e-6)
+    cam2_std = torch.clamp(cam2_std, min=1e-6)
+    
+    dataset_stats = {
+        'observation.state': {
+            'mean': qpos_mean,
+            'std': qpos_std
+        },
+        'action': {
+            'mean': action_mean,
+            'std': action_std
+        },
+        'observation.image_camera_1': {
+            'mean': cam1_mean,
+            'std': cam1_std
+        },
+        'observation.image_camera_2': {
+            'mean': cam2_mean,
+            'std': cam2_std
+        }
+    }
+    
+    print("Dataset statistics computed successfully!")
+    print(f"Camera 1 - Mean: {cam1_mean.flatten()}, Std: {cam1_std.flatten()}")
+    print(f"Camera 2 - Mean: {cam2_mean.flatten()}, Std: {cam2_std.flatten()}")
+    
+    return dataset_stats
+
 def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8, 
                               train_val_split=0.8, num_workers=4, 
-                              prefetch_factor=2, seed=42):
+                              prefetch_factor=2, seed=42, compute_stats_from_all=True):
     """
     Initialize WebDataset-based training and validation dataloaders.
     Uses WebDataset's built-in splitting mechanism.
+    
+    Args:
+        data_dir: Directory containing WebDataset .tar files
+        chunk_size: Action sequence chunk size
+        batch_size: Batch size for dataloaders
+        train_val_split: Fraction of data for training
+        num_workers: Number of worker processes
+        prefetch_factor: Prefetch factor for dataloader
+        seed: Random seed for reproducibility
+        compute_stats_from_all: If True, compute stats from all samples. If False, use max 1000 samples.
     """
     
     # Set random seed for reproducible splits
@@ -494,80 +622,8 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     
     # Calculate dataset statistics from training data
     print("Calculating dataset statistics...")
-    dataset_stats = calculate_webdataset_stats(train_dataloader, max_samples=1000)
+    max_samples = None if compute_stats_from_all else 1000
+    dataset_stats = calculate_webdataset_stats(train_dataloader, max_samples=max_samples)
     
     return train_dataloader, val_dataloader, dataset_stats
-
-def calculate_webdataset_stats(dataloader, max_samples=1000):
-    """Calculate dataset statistics from WebDataset dataloader."""
-    print(f"Computing dataset statistics from up to {max_samples} samples...")
-    
-    all_qpos = []
-    all_actions = []
-    
-    sample_count = 0
-    for batch in dataloader:
-        batch_size = batch['observation.state'].shape[0]
-        
-        # Collect qpos data
-        qpos_batch = batch['observation.state']  # (B, qpos_dim)
-        all_qpos.append(qpos_batch)
-        
-        # Collect action data (excluding padded actions)
-        actions_batch = batch['action']  # (B, chunk_size, action_dim)
-        is_pad_batch = batch['action_is_pad']  # (B, chunk_size)
-        
-        # Only use non-padded actions for statistics
-        for i in range(batch_size):
-            real_actions = actions_batch[i][~is_pad_batch[i]]  # (real_length, action_dim)
-            if len(real_actions) > 0:
-                all_actions.append(real_actions)
-        
-        sample_count += batch_size
-        if sample_count >= max_samples:
-            break
-    
-    # Compute statistics for qpos and actions
-    all_qpos = torch.cat(all_qpos, dim=0)  # (N, qpos_dim)
-    all_actions = torch.cat(all_actions, dim=0)  # (M, action_dim)
-    
-    # Compute qpos statistics
-    qpos_mean = all_qpos.mean(dim=0)
-    qpos_std = all_qpos.std(dim=0)
-    
-    # Compute action statistics
-    action_mean = all_actions.mean(dim=0)
-    action_std = all_actions.std(dim=0)
-    
-    # Ensure std is not zero (add small epsilon if needed)
-    qpos_std = torch.clamp(qpos_std, min=1e-6)
-    action_std = torch.clamp(action_std, min=1e-6)
-    
-    # Use standard ImageNet statistics for images (images are already /255 normalized)
-    imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).reshape(-1, 1, 1)  # (3, 1, 1)
-    imagenet_std = torch.tensor([0.229, 0.224, 0.225]).reshape(-1, 1, 1)   # (3, 1, 1)
-    
-    dataset_stats = {
-        'observation.state': {
-            'mean': qpos_mean,
-            'std': qpos_std
-        },
-        'action': {
-            'mean': action_mean,
-            'std': action_std
-        },
-        'observation.image_camera_1': {
-            'mean': imagenet_mean,
-            'std': imagenet_std
-        },
-        'observation.image_camera_2': {
-            'mean': imagenet_mean,
-            'std': imagenet_std
-        }
-
-    }
-    
-    print(f"Computed statistics from {len(all_qpos)} qpos samples and {len(all_actions)} action samples")
-    print("Using ImageNet statistics for image normalization")
-    return dataset_stats
 
