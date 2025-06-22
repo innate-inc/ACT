@@ -5,19 +5,26 @@ import wandb
 import os # For WANDB_API_KEY and os.path, os.makedirs
 from datetime import datetime
 import socket
+import time  # Add for profiling
 
 from ACT import ACTConfig, ACTPolicy # Assuming ACT.py is in the same directory or PYTHONPATH
-from data_utils import initialize_data # Assuming data_utils.py is in the same directory or PYTHONPATH
+from data_utils import initialize_webdataset_data # Changed from initialize_data to initialize_webdataset_data
+from data_tools.webdataset import convert_hdf5_to_webdataset  # Import conversion function
 
 # --- Configuration ---
 # Data parameters
-DATA_DIR = "/home/vignesh/raid/Socks_1_2_3_terminated" # Replace with your actual data directory
+
+DATA_DIR = "/home/vignesh/raid/PaperMulti_1_2_Filtered"  # Updated to your new data directory
+
 CHUNK_SIZE = 30
 TRAIN_VAL_SPLIT = 0.9
-BATCH_SIZE = 32 # Adjust based on your GPU memory
-NUM_WORKERS = 0 # Adjust based on your system
+BATCH_SIZE = 96 # Adjust based on your GPU memory
+NUM_WORKERS = 4 # Increased for WebDataset efficiency
 USE_IMG_AUG_TRAIN = False # Example, set as needed
 USE_IMG_AUG_VAL = False
+
+# WebDataset conversion parameters
+SHARD_SIZE = 1000  # Samples per shard for WebDataset conversion
 
 # Task name and automatic checkpoint directory generation
 TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))  # Extract directory name from DATA_DIR
@@ -25,6 +32,9 @@ TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))  # Extract directory name fro
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}"
 CHECKPOINT_DIR = os.path.join(DATA_DIR, "checkpoints", RUN_NAME)
+
+# Derived WebDataset directory
+WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
 
 # ACT Policy parameters (Example - these should match your dataset and desired model complexity)
 # These are just placeholders and should be configured based on data_utils.py constants
@@ -57,23 +67,60 @@ KL_WEIGHT = 10.0 # If using VAE
 USE_VAE = True # Or False, depending on your choice
 
 # Training parameters
-NUM_EPOCHS = 100000
+MAX_STEPS = 60000  # Changed from NUM_EPOCHS to MAX_STEPS
 LEARNING_RATE = 1e-5
 WEIGHT_DECAY = 5e-4
 LEARNING_RATE_BACKBONE = 1e-5
-#GRAD_CLIP_NORM = 1.0 # Optional gradient clipping
+
+# Calculate checkpoint interval for exactly 10 checkpoints
+CHECKPOINT_INTERVAL = MAX_STEPS // 10
 
 # W&B Configuration
-WANDB_PROJECT = "act-simple"  # Fixed project name
+WANDB_PROJECT = "act-simple"  # Changed from "wandb_test"
 WANDB_ENTITY = None # Replace with your W&B username or team name if desired
 
 # Your W&B API Key
 WANDB_API_KEY = "f25e8c35a0cd601c2cafcdbfd698ce8cfba25a9c"
 
+def convert_data_if_needed():
+    """Convert HDF5 data to WebDataset format, always overwriting existing data."""
+    print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
+    print("=" * 50)
+    
+    # Remove existing WebDataset directory if it exists
+    if os.path.exists(WEBD_DIR):
+        import shutil
+        print(f"🗑️  Removing existing WebDataset directory: {WEBD_DIR}")
+        shutil.rmtree(WEBD_DIR)
+    
+    print(f"🔄 Converting HDF5 data to WebDataset format...")
+    print(f"📁 HDF5 source: {DATA_DIR}")
+    print(f"📁 WebDataset target: {WEBD_DIR}")
+    print(f"📦 Shard size: {SHARD_SIZE}")
+    
+    # Perform conversion
+    success = convert_hdf5_to_webdataset(
+        hdf5_directory=DATA_DIR,
+        webd_directory=WEBD_DIR,
+        shard_size=SHARD_SIZE
+    )
+    
+    if success:
+        print("✅ Data conversion completed successfully!")
+        return True
+    else:
+        print("❌ Data conversion failed!")
+        return False
+
 def main():
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    # Convert data if needed
+    if not convert_data_if_needed():
+        print("❌ Failed to convert data. Exiting...")
+        return
     
     # Create checkpoint directory
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -91,6 +138,7 @@ def main():
 
     wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=RUN_NAME, config={
         "data_dir": DATA_DIR,
+        "webd_dir": WEBD_DIR,  # Add WebDataset directory to config
         "task_name": TASK_NAME,
         "timestamp": TIMESTAMP,
         "run_name": RUN_NAME,
@@ -101,7 +149,7 @@ def main():
         "learning_rate": LEARNING_RATE,
         "weight_decay": WEIGHT_DECAY,
         "lr_backbone": LEARNING_RATE_BACKBONE,
-        "num_epochs": NUM_EPOCHS,
+        "max_steps": MAX_STEPS,  # Changed from num_epochs
         "dim_model": DIM_MODEL,
         "n_heads": N_HEADS,
         "n_encoder_layers": N_ENCODER_LAYERS,
@@ -116,28 +164,28 @@ def main():
         "action_dim": ACTION_DIM,
         "input_shapes": INPUT_SHAPES,
         "output_shapes": OUTPUT_SHAPES,
+        "shard_size": SHARD_SIZE,  # Add shard size to config
     })
 
     # --- 1. Initialize DataLoaders and get dataset_stats ---
-    print("Initializing data loaders...")
+    print("Initializing WebDataset data loaders...")
     try:
-        train_dataloader, val_dataloader, dataset_stats = initialize_data(
-            data_dir=DATA_DIR,
+        train_dataloader, val_dataloader, dataset_stats = initialize_webdataset_data(
+            data_dir=WEBD_DIR,  # Use WebDataset directory instead of HDF5 directory
             chunk_size=CHUNK_SIZE,
-            train_val_split=TRAIN_VAL_SPLIT,
             batch_size=BATCH_SIZE,
+            train_val_split=TRAIN_VAL_SPLIT,
             num_workers=NUM_WORKERS,
-            use_img_aug_train=USE_IMG_AUG_TRAIN,
-            use_img_aug_val=USE_IMG_AUG_VAL,
+            prefetch_factor=2,  # WebDataset-specific parameter
             seed=42 # for reproducibility
         )
     except FileNotFoundError as e:
-        print(f"Error initializing data: {e}")
-        print(f"Please ensure your data directory '{DATA_DIR}' is correctly set and contains 'metadata.json' and episode files.")
+        print(f"Error initializing WebDataset: {e}")
+        print(f"Please ensure your data directory '{WEBD_DIR}' contains WebDataset .tar files.")
         wandb.finish(exit_code=1)
         return
     except ValueError as e:
-        print(f"Error initializing data: {e}")
+        print(f"Error initializing WebDataset: {e}")
         wandb.finish(exit_code=1)
         return
 
@@ -154,11 +202,8 @@ def main():
             print(f"Error saving dataset_stats: {e}")
             # Decide if this is a critical error. For now, just print and continue.
 
-    print(f"Number of training batches: {len(train_dataloader)}")
-    if val_dataloader and len(val_dataloader) > 0 :
-        print(f"Number of validation batches: {len(val_dataloader)}")
-    else:
-        print("No validation data or validation split resulted in 0 validation episodes.")
+    # Note: WebDataset dataloaders don't have len(), so we'll skip length printing
+    print("WebDataset dataloaders initialized (streaming datasets - no fixed length)")
 
     # --- 2. Initialize ACT Policy and Optimizer ---
     print("Initializing ACT Policy...")
@@ -186,128 +231,181 @@ def main():
 
     wandb.watch(policy, log="all", log_freq=100) # Log gradients and model parameters
 
-    # --- 3. Training Loop ---
-    print("Starting training...")
-    global_step = 0
+    # --- 3. Step-based Training Loop ---
+    print("Starting step-based training...")
+    step = 0
     
-    # Initialize tqdm for the entire training process (epochs)
-    overall_pbar = tqdm(range(NUM_EPOCHS), unit="epoch", desc="Overall Training Progress")
+    # Initialize tqdm for the entire training process (steps)
+    overall_pbar = tqdm(total=MAX_STEPS, unit="step", desc="Training Progress")
 
-    # Initialize placeholders for latest validation metrics
+    # Initialize placeholders for validation metrics
     latest_val_avg_loss = "N/A"
     latest_val_avg_l1_loss = "N/A"
     latest_val_avg_kld_loss = "N/A"
 
-    for epoch in overall_pbar: # `epoch` is the current epoch index (0, 1, ...)
+    # Create infinite iterator from dataloader
+    train_iter = iter(train_dataloader)
+    
+    # Create persistent validation iterator
+    val_iter = iter(val_dataloader)
+    
+    # Profiling variables
+    batch_load_times = []
+    forward_times = []
+    backward_times = []
+    optimizer_times = []
+    total_step_times = []
+    
+    while step < MAX_STEPS:
+        step_start_time = time.time()
         policy.train()
-        epoch_loss_sum = 0.0
-        epoch_l1_loss_sum = 0.0
-        epoch_kld_loss_sum = 0.0
         
-        # Set the description for the current epoch on the overall progress bar
-        # This description will no longer change for validation
-        overall_pbar.set_description(f"Epoch {epoch+1}/{NUM_EPOCHS}")
+        # 1. Batch Loading
+        batch_load_start = time.time()
+        try:
+            batch = next(train_iter)
+        except StopIteration:
+            # Reset iterator when dataset is exhausted (start new "epoch")
+            train_iter = iter(train_dataloader)
+            batch = next(train_iter)
+            overall_pbar.write(f"Completed one pass through dataset at step {step}")
         
-        for batch_idx, batch in enumerate(train_dataloader): # Iterate directly, no inner tqdm
-            # Move batch to device
-            batch_device = {}
-            for key, tensor in batch.items():
-                if isinstance(tensor, torch.Tensor):
-                    batch_device[key] = tensor.to(device)
-                else:
-                    batch_device[key] = tensor # e.g. 'action_is_pad' could be bool list
-            
-            # Forward pass
-            loss, loss_dict = policy(batch_device)
-
-            # Backward pass and optimization
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            # Log metrics to WandB
-            wandb.log({
-                "train/total_loss": loss.item(),
-                "train/l1_loss": loss_dict.get("l1_loss", 0),
-                "train/kld_loss": loss_dict.get("kld_loss", 0),
-                "epoch": epoch,
-                "global_step": global_step
-            })
-            
-            epoch_loss_sum += loss.item()
-            epoch_l1_loss_sum += loss_dict.get("l1_loss", 0)
-            epoch_kld_loss_sum += loss_dict.get("kld_loss", 0)
-            
-            global_step += 1
+        # Move batch to device
+        batch_device = {}
+        for key, tensor in batch.items():
+            if isinstance(tensor, torch.Tensor):
+                batch_device[key] = tensor.to(device)
+            else:
+                batch_device[key] = tensor
         
-        # After all batches in the epoch, calculate averages
-        avg_epoch_loss_str = "N/A"
-        avg_l1_loss_str = "N/A"
-        avg_kld_loss_str = "N/A"
+        if device.type == 'cuda':
+            torch.cuda.synchronize()  # Ensure GPU operations are complete
+        batch_load_time = time.time() - batch_load_start
+        
+        # 2. Forward Pass
+        forward_start = time.time()
+        loss, loss_dict = policy(batch_device)
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        forward_time = time.time() - forward_start
+        
+        # 3. Backward Pass
+        backward_start = time.time()
+        optimizer.zero_grad()
+        loss.backward()
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        backward_time = time.time() - backward_start
+        
+        # 4. Optimizer Update
+        optimizer_start = time.time()
+        optimizer.step()
+        if device.type == 'cuda':
+            torch.cuda.synchronize()
+        optimizer_time = time.time() - optimizer_start
+        
+        total_step_time = time.time() - step_start_time
+        
+        # Store timing data
+        batch_load_times.append(batch_load_time)
+        forward_times.append(forward_time)
+        backward_times.append(backward_time)
+        optimizer_times.append(optimizer_time)
+        total_step_times.append(total_step_time)
 
-        if len(train_dataloader) > 0:
-            avg_epoch_loss = epoch_loss_sum / len(train_dataloader)
-            avg_l1_loss = epoch_l1_loss_sum / len(train_dataloader)
-            avg_kld_loss = epoch_kld_loss_sum / len(train_dataloader) if USE_VAE else 0.0
-            
-            avg_epoch_loss_str = f"{avg_epoch_loss:.4f}"
-            avg_l1_loss_str = f"{avg_l1_loss:.4f}"
-            avg_kld_loss_str = f"{avg_kld_loss:.4f}"
-            
-            # Log epoch averages to WandB
-            wandb.log({
-                "train_epoch/avg_total_loss": avg_epoch_loss,
-                "train_epoch/avg_l1_loss": avg_l1_loss,
-                "train_epoch/avg_kld_loss": avg_kld_loss,
-                "epoch": epoch
-            })
-        elif epoch == 0: 
-            overall_pbar.write("Warning: train_dataloader is empty. Cannot compute epoch averages.")
-
-        # --- Optional: Validation Step ---
-        if val_dataloader and len(val_dataloader) > 0 and (epoch + 1) % 5 == 0: 
-            # original_desc = overall_pbar.desc # No longer needed
-            # overall_pbar.set_description(f"Validating Epoch {epoch+1}/{NUM_EPOCHS}") # No longer changing description
-            policy.eval()
-            val_loss_sum = 0.0
-            val_l1_loss_sum = 0.0
-            val_kld_loss_sum = 0.0
-            with torch.no_grad():
-                for batch_val in val_dataloader: 
-                    batch_device_val = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch_val.items()}
-                    loss, loss_dict = policy(batch_device_val)
-                    val_loss_sum += loss.item()
-                    val_l1_loss_sum += loss_dict.get("l1_loss", 0)
-                    val_kld_loss_sum += loss_dict.get("kld_loss", 0)
-            
-            # Update latest validation metrics
-            latest_val_avg_loss = f"{(val_loss_sum / len(val_dataloader)):.4f}"
-            latest_val_avg_l1_loss = f"{(val_l1_loss_sum / len(val_dataloader)):.4f}"
-            latest_val_avg_kld_loss = f"{(val_kld_loss_sum / len(val_dataloader) if USE_VAE else 0):.4f}"
-
-            wandb.log({
-                "val/avg_total_loss": float(latest_val_avg_loss) if latest_val_avg_loss != "N/A" else 0,
-                "val/avg_l1_loss": float(latest_val_avg_l1_loss) if latest_val_avg_l1_loss != "N/A" else 0,
-                "val/avg_kld_loss": float(latest_val_avg_kld_loss) if latest_val_avg_kld_loss != "N/A" else 0,
-                "epoch": epoch
-            })
-            # overall_pbar.set_description(original_desc) # No longer needed
-            
-        # Update overall_pbar postfix with epoch averages AND latest validation metrics
+        # Log metrics to WandB (including timing)
+        wandb.log({
+            "train/total_loss": loss.item(),
+            "train/l1_loss": loss_dict.get("l1_loss", 0),
+            "train/kld_loss": loss_dict.get("kld_loss", 0),
+            "timing/batch_load_ms": batch_load_time * 1000,
+            "timing/forward_ms": forward_time * 1000,
+            "timing/backward_ms": backward_time * 1000,
+            "timing/optimizer_ms": optimizer_time * 1000,
+            "timing/total_step_ms": total_step_time * 1000,
+            "step": step
+        })
+        
+        step += 1
+        overall_pbar.update(1)
+        
+        # Update progress bar postfix with timing info
         overall_pbar.set_postfix(
-            train_loss=avg_epoch_loss_str,
-            train_l1=avg_l1_loss_str,
-            train_kld=avg_kld_loss_str,
+            loss=f"{loss.item():.4f}",
+            l1=f"{loss_dict.get('l1_loss', 0):.4f}",
+            kld=f"{loss_dict.get('kld_loss', 0):.4f}",
+            step_ms=f"{total_step_time*1000:.1f}",
             val_loss=latest_val_avg_loss,
-            val_l1=latest_val_avg_l1_loss,
-            val_kld=latest_val_avg_kld_loss,
-            refresh=True 
+            refresh=True
         )
+        
+        # Print detailed timing every 100 steps
+        if step % 100 == 0:
+            avg_batch_load = sum(batch_load_times[-100:]) / len(batch_load_times[-100:]) * 1000
+            avg_forward = sum(forward_times[-100:]) / len(forward_times[-100:]) * 1000
+            avg_backward = sum(backward_times[-100:]) / len(backward_times[-100:]) * 1000
+            avg_optimizer = sum(optimizer_times[-100:]) / len(optimizer_times[-100:]) * 1000
+            avg_total = sum(total_step_times[-100:]) / len(total_step_times[-100:]) * 1000
+            
+            overall_pbar.write(
+                f"Step {step} - Avg timing (last 100 steps): "
+                f"Batch: {avg_batch_load:.1f}ms, "
+                f"Forward: {avg_forward:.1f}ms, "
+                f"Backward: {avg_backward:.1f}ms, "
+                f"Optimizer: {avg_optimizer:.1f}ms, "
+                f"Total: {avg_total:.1f}ms"
+            )
+
+        # --- Validation Step ---
+        if step % 100 == 0:  # Validate every 100 steps
+            val_start_time = time.time()
+            policy.eval()
+            
+            with torch.no_grad():
+                try:
+                    # Time batch loading (no iterator creation needed)
+                    batch_load_start = time.time()
+                    batch_val = next(val_iter)
+                    batch_device_val = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch_val.items()}
+                    if device.type == 'cuda':
+                        torch.cuda.synchronize()
+                    batch_load_time = time.time() - batch_load_start
+                    
+                    # Time forward pass
+                    forward_start = time.time()
+                    loss, loss_dict = policy(batch_device_val)
+                    if device.type == 'cuda':
+                        torch.cuda.synchronize()
+                    forward_time = time.time() - forward_start
+                    
+                    # Single batch validation metrics
+                    latest_val_avg_loss = f"{loss.item():.4f}"
+                    latest_val_avg_l1_loss = f"{loss_dict.get('l1_loss', 0):.4f}"
+                    latest_val_avg_kld_loss = f"{loss_dict.get('kld_loss', 0):.4f}"
+
+                    total_val_time = time.time() - val_start_time
+                    
+                    wandb.log({
+                        "val/avg_total_loss": loss.item(),
+                        "val/avg_l1_loss": loss_dict.get("l1_loss", 0),
+                        "val/avg_kld_loss": loss_dict.get("kld_loss", 0),
+                        "val_timing/batch_load_ms": batch_load_time * 1000,
+                        "val_timing/forward_ms": forward_time * 1000,
+                        "val_timing/total_val_ms": total_val_time * 1000,
+                        "step": step
+                    })
+                    
+                    overall_pbar.write(f"Validation at step {step}: Loss={loss.item():.4f}, "
+                                     f"Total={total_val_time*1000:.1f}ms (load={batch_load_time*1000:.1f}ms, forward={forward_time*1000:.1f}ms)")
+                    
+                except StopIteration:
+                    # Reset validation iterator when dataset is exhausted  
+                    val_iter = iter(val_dataloader)
+                    overall_pbar.write(f"Validation dataset exhausted at step {step}, resetting iterator")
 
         # Save model checkpoint
-        if (epoch + 1) % 10000 == 0 or (epoch + 1) == NUM_EPOCHS:
-            # Note: CHECKPOINT_DIR is already created above
-            checkpoint_name = f"act_policy_epoch_{epoch+1}.pth"
+        if step % CHECKPOINT_INTERVAL == 0 or step == MAX_STEPS:
+            checkpoint_name = f"act_policy_step_{step}.pth"
             checkpoint_path = os.path.join(CHECKPOINT_DIR, checkpoint_name)
             torch.save(policy.state_dict(), checkpoint_path)
             overall_pbar.write(f"Saved checkpoint: {checkpoint_path}")
