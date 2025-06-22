@@ -13,6 +13,7 @@ import argparse
 
 from ACT import ACTConfig, ACTPolicy
 from data_utils import initialize_webdataset_data
+from data_tools.webdataset import convert_hdf5_to_webdataset  # Import conversion function
 
 def setup(rank, world_size):
     """Initialize the distributed environment."""
@@ -29,19 +30,54 @@ def cleanup():
     """Clean up the distributed environment."""
     dist.destroy_process_group()
 
-def train_ddp(rank, world_size, args):
+def convert_data_always():
+    """Always convert HDF5 data to WebDataset format (before distributed training)."""
+    DATA_DIR = "/home/vignesh/raid/PaperMulti_1_2_Filtered"
+    WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
+    SHARD_SIZE = 1000
+    
+    print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
+    print("=" * 50)
+    
+    # Remove existing WebDataset directory if it exists
+    if os.path.exists(WEBD_DIR):
+        import shutil
+        print(f"🗑️  Removing existing WebDataset directory: {WEBD_DIR}")
+        shutil.rmtree(WEBD_DIR)
+    
+    print(f"🔄 Converting HDF5 data to WebDataset format...")
+    print(f"📁 HDF5 source: {DATA_DIR}")
+    print(f"📁 WebDataset target: {WEBD_DIR}")
+    print(f"📦 Shard size: {SHARD_SIZE}")
+    
+    # Perform conversion
+    success = convert_hdf5_to_webdataset(
+        hdf5_directory=DATA_DIR,
+        webd_directory=WEBD_DIR,
+        shard_size=SHARD_SIZE
+    )
+    
+    if success:
+        print("✅ Data conversion completed successfully!")
+        return True, WEBD_DIR
+    else:
+        print("❌ Data conversion failed!")
+        return False, None
+
+def train_ddp(rank, world_size, args, webd_dir):
     """Main distributed training function."""
     setup(rank, world_size)
     
     # --- Configuration ---
     # Data parameters
-    DATA_DIR = "/home/vignesh/raid/DropSocks_1_2_webd/"
+    DATA_DIR = "/home/vignesh/raid/PaperMulti_1_2_Filtered"
     CHUNK_SIZE = 30
     TRAIN_VAL_SPLIT = 0.9
-    BATCH_SIZE = 96  # Keep original batch size per GPU for 4x effective batch size
+    BATCH_SIZE = 96
     NUM_WORKERS = 4
-    USE_IMG_AUG_TRAIN = False
-    USE_IMG_AUG_VAL = False
+
+    # WebDataset conversion parameters
+    SHARD_SIZE = 1000
 
     # Task name and automatic checkpoint directory generation
     TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))
@@ -49,12 +85,15 @@ def train_ddp(rank, world_size, args):
     RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}_ddp"
     CHECKPOINT_DIR = os.path.join(DATA_DIR, "checkpoints", RUN_NAME)
 
+    # Use the WebDataset directory passed from main
+    WEBD_DIR = webd_dir
+
     # ACT Policy parameters
     IMAGE_H = 480
     IMAGE_W = 640
     IMAGE_C = 3
     QPOS_DIM = 6
-    ACTION_DIM = 8
+    ACTION_DIM = 10
 
     INPUT_SHAPES = {
         "observation.image_camera_1": [IMAGE_C, IMAGE_H, IMAGE_W],
@@ -77,15 +116,15 @@ def train_ddp(rank, world_size, args):
 
     # Training parameters
     MAX_STEPS = 15000  # 20000 / 4
-    LEARNING_RATE = 1e-5
+    LEARNING_RATE = 5e-5
     WEIGHT_DECAY = 5e-4
-    LEARNING_RATE_BACKBONE = 1e-5
+    LEARNING_RATE_BACKBONE = 5e-5
     
     # Calculate checkpoint interval for exactly 10 checkpoints
     CHECKPOINT_INTERVAL = MAX_STEPS // 10
 
     # W&B Configuration
-    WANDB_PROJECT = "wandb_test_ddp"
+    WANDB_PROJECT = "act-simple"
     WANDB_ENTITY = None
     WANDB_API_KEY = "f25e8c35a0cd601c2cafcdbfd698ce8cfba25a9c"
 
@@ -96,6 +135,7 @@ def train_ddp(rank, world_size, args):
     if rank == 0:
         print(f"Starting distributed training on {world_size} GPUs")
         print(f"Using device: {device}")
+        print(f"Using WebDataset directory: {WEBD_DIR}")
         
         # Create checkpoint directory
         os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -107,6 +147,7 @@ def train_ddp(rank, world_size, args):
         
         wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=RUN_NAME, config={
             "data_dir": DATA_DIR,
+            "webd_dir": WEBD_DIR,
             "task_name": TASK_NAME,
             "timestamp": TIMESTAMP,
             "run_name": RUN_NAME,
@@ -134,6 +175,7 @@ def train_ddp(rank, world_size, args):
             "action_dim": ACTION_DIM,
             "input_shapes": INPUT_SHAPES,
             "output_shapes": OUTPUT_SHAPES,
+            "shard_size": SHARD_SIZE,
         })
 
     # --- 1. Initialize DataLoaders and get dataset_stats ---
@@ -142,20 +184,18 @@ def train_ddp(rank, world_size, args):
     
     try:
         train_dataloader, val_dataloader, dataset_stats = initialize_webdataset_data(
-            data_dir=DATA_DIR,
+            data_dir=WEBD_DIR,
             chunk_size=CHUNK_SIZE,
             batch_size=BATCH_SIZE,
             train_val_split=TRAIN_VAL_SPLIT,
-            use_img_aug_train=USE_IMG_AUG_TRAIN,
-            use_img_aug_val=USE_IMG_AUG_VAL,
             num_workers=NUM_WORKERS,
             prefetch_factor=2,
-            seed=42 + rank  # Different seed for each rank to ensure different data
+            seed=42 + rank
         )
     except (FileNotFoundError, ValueError) as e:
         if rank == 0:
             print(f"Error initializing WebDataset: {e}")
-            print(f"Please ensure your data directory '{DATA_DIR}' contains WebDataset .tar files.")
+            print(f"Please ensure your data directory '{WEBD_DIR}' contains WebDataset .tar files.")
             wandb.finish(exit_code=1)
         cleanup()
         return
@@ -439,10 +479,18 @@ def main():
         print("No CUDA devices available. Exiting.")
         return
     
-    print(f"Starting distributed training on {world_size} GPUs")
+    # Always convert data BEFORE starting distributed training
+    conversion_success, webd_dir = convert_data_always()
     
-    # Spawn processes for distributed training
-    mp.spawn(train_ddp, args=(world_size, args), nprocs=world_size, join=True)
+    if not conversion_success:
+        print("❌ Failed to convert data. Exiting...")
+        return
+    
+    print(f"Starting distributed training on {world_size} GPUs")
+    print(f"Using WebDataset directory: {webd_dir}")
+    
+    # Spawn processes for distributed training, passing the WebDataset directory
+    mp.spawn(train_ddp, args=(world_size, args, webd_dir), nprocs=world_size, join=True)
 
 if __name__ == "__main__":
     main()
