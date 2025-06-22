@@ -22,7 +22,7 @@ import re
 
 class EpisodicHDF5DatasetRAM(Dataset):
     # --- Hardcoded Values Based on User Guarantees ---
-    ACTION_DIM = 8
+    ACTION_DIM = 10
     QPOS_DIM = 6
     IMAGE_H = 480
     IMAGE_W = 640

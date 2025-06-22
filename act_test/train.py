@@ -13,7 +13,9 @@ from data_tools.webdataset import convert_hdf5_to_webdataset  # Import conversio
 
 # --- Configuration ---
 # Data parameters
+
 DATA_DIR = "/home/vignesh/raid/PaperMulti_1_2_Filtered"  # Updated to your new data directory
+
 CHUNK_SIZE = 30
 TRAIN_VAL_SPLIT = 0.9
 BATCH_SIZE = 96 # Adjust based on your GPU memory
