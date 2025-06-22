@@ -9,16 +9,20 @@ import time  # Add for profiling
 
 from ACT import ACTConfig, ACTPolicy # Assuming ACT.py is in the same directory or PYTHONPATH
 from data_utils import initialize_webdataset_data # Changed from initialize_data to initialize_webdataset_data
+from data_tools.webdataset import convert_hdf5_to_webdataset  # Import conversion function
 
 # --- Configuration ---
 # Data parameters
-DATA_DIR = "/home/vignesh/raid/DropSocks_1_2_webd/" # Changed to WebDataset directory
+DATA_DIR = "/home/vignesh/raid/PaperMulti_1_2_Filtered"  # Updated to your new data directory
 CHUNK_SIZE = 30
 TRAIN_VAL_SPLIT = 0.9
 BATCH_SIZE = 96 # Adjust based on your GPU memory
 NUM_WORKERS = 4 # Increased for WebDataset efficiency
 USE_IMG_AUG_TRAIN = False # Example, set as needed
 USE_IMG_AUG_VAL = False
+
+# WebDataset conversion parameters
+SHARD_SIZE = 1000  # Samples per shard for WebDataset conversion
 
 # Task name and automatic checkpoint directory generation
 TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))  # Extract directory name from DATA_DIR
@@ -27,6 +31,9 @@ TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}"
 CHECKPOINT_DIR = os.path.join(DATA_DIR, "checkpoints", RUN_NAME)
 
+# Derived WebDataset directory
+WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
+
 # ACT Policy parameters (Example - these should match your dataset and desired model complexity)
 # These are just placeholders and should be configured based on data_utils.py constants
 # and your specific task requirements.
@@ -34,7 +41,7 @@ IMAGE_H = 480 # From data_utils.py
 IMAGE_W = 640 # From data_utils.py
 IMAGE_C = 3   # From data_utils.py
 QPOS_DIM = 6  # From data_utils.py (State dimension)
-ACTION_DIM = 8 # From data_utils.py
+ACTION_DIM = 10 # From data_utils.py
 
 # Define input_shapes based on your data_utils.py and dataset structure
 # This is a critical part and needs to be accurate.
@@ -67,16 +74,51 @@ LEARNING_RATE_BACKBONE = 1e-5
 CHECKPOINT_INTERVAL = MAX_STEPS // 10
 
 # W&B Configuration
-WANDB_PROJECT = "wandb_test"  # Changed from "act-simple"
+WANDB_PROJECT = "act-simple"  # Changed from "wandb_test"
 WANDB_ENTITY = None # Replace with your W&B username or team name if desired
 
 # Your W&B API Key
 WANDB_API_KEY = "f25e8c35a0cd601c2cafcdbfd698ce8cfba25a9c"
 
+def convert_data_if_needed():
+    """Convert HDF5 data to WebDataset format, always overwriting existing data."""
+    print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
+    print("=" * 50)
+    
+    # Remove existing WebDataset directory if it exists
+    if os.path.exists(WEBD_DIR):
+        import shutil
+        print(f"🗑️  Removing existing WebDataset directory: {WEBD_DIR}")
+        shutil.rmtree(WEBD_DIR)
+    
+    print(f"🔄 Converting HDF5 data to WebDataset format...")
+    print(f"📁 HDF5 source: {DATA_DIR}")
+    print(f"📁 WebDataset target: {WEBD_DIR}")
+    print(f"📦 Shard size: {SHARD_SIZE}")
+    
+    # Perform conversion
+    success = convert_hdf5_to_webdataset(
+        hdf5_directory=DATA_DIR,
+        webd_directory=WEBD_DIR,
+        shard_size=SHARD_SIZE
+    )
+    
+    if success:
+        print("✅ Data conversion completed successfully!")
+        return True
+    else:
+        print("❌ Data conversion failed!")
+        return False
+
 def main():
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    # Convert data if needed
+    if not convert_data_if_needed():
+        print("❌ Failed to convert data. Exiting...")
+        return
     
     # Create checkpoint directory
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -94,6 +136,7 @@ def main():
 
     wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=RUN_NAME, config={
         "data_dir": DATA_DIR,
+        "webd_dir": WEBD_DIR,  # Add WebDataset directory to config
         "task_name": TASK_NAME,
         "timestamp": TIMESTAMP,
         "run_name": RUN_NAME,
@@ -119,13 +162,14 @@ def main():
         "action_dim": ACTION_DIM,
         "input_shapes": INPUT_SHAPES,
         "output_shapes": OUTPUT_SHAPES,
+        "shard_size": SHARD_SIZE,  # Add shard size to config
     })
 
     # --- 1. Initialize DataLoaders and get dataset_stats ---
     print("Initializing WebDataset data loaders...")
     try:
         train_dataloader, val_dataloader, dataset_stats = initialize_webdataset_data(
-            data_dir=DATA_DIR,
+            data_dir=WEBD_DIR,  # Use WebDataset directory instead of HDF5 directory
             chunk_size=CHUNK_SIZE,
             batch_size=BATCH_SIZE,
             train_val_split=TRAIN_VAL_SPLIT,
@@ -135,7 +179,7 @@ def main():
         )
     except FileNotFoundError as e:
         print(f"Error initializing WebDataset: {e}")
-        print(f"Please ensure your data directory '{DATA_DIR}' contains WebDataset .tar files.")
+        print(f"Please ensure your data directory '{WEBD_DIR}' contains WebDataset .tar files.")
         wandb.finish(exit_code=1)
         return
     except ValueError as e:
