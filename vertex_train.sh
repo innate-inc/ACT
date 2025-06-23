@@ -86,13 +86,7 @@ apt update -y
 
 # Install required packages
 echo "🔄 Installing required packages..."
-apt install -y \
-    mdadm \
-    google-cloud-cli \
-    python3-pip \
-    build-essential \
-    curl \
-    wget
+apt install -y mdadm
 
 echo "✅ System dependencies installed successfully"
 echo ""
@@ -211,7 +205,7 @@ echo "🎯 Starting distributed training..."
 echo "==================================="
 
 # Build the python command with arguments
-PYTHON_CMD="python act_test/train_dist.py --data_dir \"$LOCAL_DATA_DIR\" --chunk_size $CHUNK_SIZE --max_steps $MAX_STEPS --learning_rate $LEARNING_RATE --learning_rate_backbone $LEARNING_RATE_BACKBONE --world_size $WORLD_SIZE"
+PYTHON_CMD="python3 act_test/train_dist.py --data_dir \"$LOCAL_DATA_DIR\" --chunk_size $CHUNK_SIZE --max_steps $MAX_STEPS --learning_rate $LEARNING_RATE --learning_rate_backbone $LEARNING_RATE_BACKBONE --world_size $WORLD_SIZE"
 
 echo "🚀 Executing: $PYTHON_CMD"
 echo ""
