@@ -213,5 +213,38 @@ echo ""
 # Change to the actual user and run the training
 sudo -u "$ACTUAL_USER" bash -c "$PYTHON_CMD"
 
+# Step 5: Upload checkpoints to GCS
+echo ""
+echo "📤 Uploading checkpoints to GCS..."
+echo "=================================="
+
+# Find the checkpoint directory (it's created inside the local data directory)
+CHECKPOINT_BASE_DIR="$LOCAL_DATA_DIR/checkpoints"
+
+if [ -d "$CHECKPOINT_BASE_DIR" ]; then
+    echo "🔍 Found checkpoint directory: $CHECKPOINT_BASE_DIR"
+    
+    # Get the most recent checkpoint directory (the one just created)
+    LATEST_CHECKPOINT_DIR=$(find "$CHECKPOINT_BASE_DIR" -maxdepth 1 -type d -name "*_ddp" | sort | tail -1)
+    
+    if [ -n "$LATEST_CHECKPOINT_DIR" ] && [ -d "$LATEST_CHECKPOINT_DIR" ]; then
+        CHECKPOINT_DIR_NAME=$(basename "$LATEST_CHECKPOINT_DIR")
+        GCS_DESTINATION="gs://maurice-prod-data/ckpts/$CHECKPOINT_DIR_NAME"
+        
+        echo "🔄 Uploading checkpoint directory: $CHECKPOINT_DIR_NAME"
+        echo "📂 Source: $LATEST_CHECKPOINT_DIR"
+        echo "☁️  Destination: $GCS_DESTINATION"
+        
+        # Upload the checkpoint directory to GCS
+        sudo -u "$ACTUAL_USER" gsutil -m cp -r "$LATEST_CHECKPOINT_DIR" "gs://maurice-prod-data/ckpts/"
+        
+        echo "✅ Checkpoints uploaded successfully to $GCS_DESTINATION"
+    else
+        echo "⚠️  No checkpoint directory found in $CHECKPOINT_BASE_DIR"
+    fi
+else
+    echo "⚠️  Checkpoint base directory not found: $CHECKPOINT_BASE_DIR"
+fi
+
 echo ""
 echo "🎉 Training completed!"
