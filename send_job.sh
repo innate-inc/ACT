@@ -31,8 +31,8 @@ if ! [[ "$MAX_STEPS" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-# Set service account (you may want to make this configurable too)
-SA="vertex-training@maurice-production.iam.gserviceaccount.com"
+# Set service account (updated to correct one)
+SA="train-sa@mauricearm.iam.gserviceaccount.com"
 
 # Generate a unique job name with timestamp
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
@@ -63,7 +63,7 @@ gcloud ai custom-jobs create \
   --region=us-east5 \
   --display-name="$JOB_NAME" \
   --service-account="$SA" \
-  --python-package-uris="gs://$BUCKET_NAME/trainer/act_test-0.1.0.tar.gz" \
+  --python-package-uris="gs://innate_images/act_test-0.1.0.tar.gz" \
   --worker-pool-spec="machine-type=a2-ultragpu-4g,replica-count=1,executor-image-uri=us-docker.pkg.dev/vertex-ai/training/pytorch-gpu.2-4.py310:latest,python-module=act_test.run_vertex,accelerator-type=NVIDIA_A100_80GB,accelerator-count=4" \
   --args="--data_dir=gs://$BUCKET_NAME/data/PaperMulti_1_2_Filtered --max_steps=$MAX_STEPS"
 

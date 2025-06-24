@@ -4,6 +4,9 @@
 
 set -e
 
+# Add /root/.local/bin to PATH
+export PATH="/root/.local/bin:$PATH"
+
 # Default values (matching train_dist.py defaults)
 WORLD_SIZE=4
 DATA_DIR="/home/vignesh/raid/PaperMulti_1_2_Filtered"

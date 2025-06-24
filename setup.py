@@ -5,6 +5,8 @@ setup(
     name="act_test",
     version="0.1.0",
     packages=find_packages(),   # will pick up the act_test directory
+    include_package_data=True,
+    package_data={"act_test": ["vertex_train.sh"]},
     python_requires=">=3.10",  # Specify Python 3.10 minimum requirement
     install_requires=[
         # Core ML/AI packages
@@ -39,6 +41,7 @@ setup(
         
         # Monitoring/Logging
         "wandb==0.19.7",
+        "python-json-logger>=2.0.0",
         
         # Development tools (optional - you might want to move these to dev dependencies)
         "ipython==8.32.0",
