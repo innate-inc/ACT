@@ -1,1 +1,1 @@
-mv vertex_train.sh act_test/vertex_train.sh
+include act_test/vertex_train.sh
