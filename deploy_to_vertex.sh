@@ -9,7 +9,7 @@ fi
 
 # Configuration
 PROJECT_ID="mauricearm"
-REGION="us-east5"
+REGION="us-central1"
 IMAGE_NAME="act-training"
 TAG="latest"
 
