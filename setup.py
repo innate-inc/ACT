@@ -13,7 +13,7 @@ setup(
         "torch==2.6.0",
         "torchaudio==2.6.0", 
         "torchvision==0.21.0",
-        "numpy==2.2.3",
+        "numpy==1.26.4",
         "einops==0.8.1",
         
         # Computer Vision
