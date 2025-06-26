@@ -5,9 +5,10 @@ set -e  # Exit on any error
 echo "🚀 Starting ACT Training Job"
 echo "================================"
 
+
 # --- Environment Sanity Check ---
 echo "🐍 Checking Python package versions..."
-python -c "import numpy; import cv2; print(f'✅ NumPy version: {numpy.__version__}')"
+python -c "import numpy; import cv2; print(f'✅ NumPy version: {numpy.__version__}'); print(f'✅ OpenCV version: {cv2.__version__}')"
 echo "--------------------------------"
 
 # Parse environment variables
