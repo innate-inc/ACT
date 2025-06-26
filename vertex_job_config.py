@@ -28,13 +28,13 @@ def create_training_job(
             "--learning_rate", "5e-5",
             "--chunk_size", "30"
         ],
-        # Machine configuration - larger disk for local data storage
-        machine_type="n1-standard-8",  # More CPU for data download
-        accelerator_type="NVIDIA_TESLA_V100",
-        accelerator_count=2,
-        # Larger disk to store all data locally
+        # Machine configuration - your powerful specs!
+        machine_type="a2-ultragpu-4g",           # 4x A100 80GB beast!
+        accelerator_type="NVIDIA_A100_80GB",
+        accelerator_count=4,
+        # Disk configuration
         boot_disk_type="pd-ssd",
-        boot_disk_size_gb=500,  # Increased for local data storage
+        boot_disk_size_gb=100,
     )
     
     # Run the training job
@@ -47,9 +47,9 @@ def create_training_job(
             "NCCL_DEBUG": "INFO",
             "DATA_BUCKET": data_path,
             "OUTPUT_BUCKET": output_path,
-            # Ensure we have enough disk space
-            "TMPDIR": "/app/tmp"
         },
+        # Service account for GCS access
+        service_account="train-sa@mauricearm.iam.gserviceaccount.com",
         # Restart policy
         restart_job_on_worker_restart=True,
         # Longer timeout for data download + training
@@ -59,6 +59,8 @@ def create_training_job(
     )
     
     print(f"Training job started: {job.resource_name}")
+    print(f"Machine: a2-ultragpu-4g with 4x A100 80GB GPUs")
+    print(f"Service Account: train-sa@mauricearm.iam.gserviceaccount.com")
     print(f"Data will be downloaded from: {data_path}")
     print(f"Outputs will be synced to: {output_path}")
     return job
