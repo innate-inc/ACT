@@ -15,12 +15,21 @@ def create_training_job(
     """Create and submit a Vertex AI training job."""
     
     # Initialize Vertex AI
-    aiplatform.init(project=project_id, location=region)
+    aiplatform.init(
+        project=project_id, 
+        location=region,
+        staging_bucket=output_path
+    )
     
     # Define the custom training job
     job = aiplatform.CustomContainerTrainingJob(
         display_name=job_name or "act-distributed-training",
         container_uri=image_uri,
+        staging_bucket=output_path,
+    )
+    
+    # Run the training job
+    job.run(
         # The container will handle data download and training
         # Pass training arguments after the download script
         args=[
@@ -28,6 +37,8 @@ def create_training_job(
             "--learning_rate", "5e-5",
             "--chunk_size", "30"
         ],
+        # This is where outputs (checkpoints, logs) will be saved
+        base_output_dir=output_path,
         # Machine configuration - your powerful specs!
         machine_type="a2-ultragpu-4g",           # 4x A100 80GB beast!
         accelerator_type="NVIDIA_A100_80GB",
@@ -35,12 +46,6 @@ def create_training_job(
         # Disk configuration
         boot_disk_type="pd-ssd",
         boot_disk_size_gb=100,
-    )
-    
-    # Run the training job
-    job.run(
-        # This is where outputs (checkpoints, logs) will be saved
-        base_output_dir=output_path,
         # Environment variables for the container
         environment_variables={
             "WANDB_MODE": "online",

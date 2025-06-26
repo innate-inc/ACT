@@ -6,7 +6,7 @@ IMAGE_NAME="act-training"
 TAG="latest"
 REGION="us-east5"
 
-# Full image URI
+# Use Google Container Registry (simpler - no repository creation needed)
 IMAGE_URI="gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${TAG}"
 
 echo "Building Docker image: ${IMAGE_URI}"
@@ -14,8 +14,11 @@ echo "Building Docker image: ${IMAGE_URI}"
 # Build the image
 docker build -t ${IMAGE_URI} .
 
-# Push to Google Container Registry
-echo "Pushing to GCR..."
+# Configure Docker for GCR
+gcloud auth configure-docker
+
+# Push to GCR
+echo "Pushing to Google Container Registry..."
 docker push ${IMAGE_URI}
 
 echo "Container built and pushed successfully!"

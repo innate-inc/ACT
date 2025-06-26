@@ -41,7 +41,7 @@ echo "✅ GCS paths validated successfully"
 
 # Build and push container
 echo "🐳 Building and pushing container..."
-./build_container.sh
+# ./build_container.sh  # Comment out or remove this line
 
 # Submit training job
 echo "🚀 Submitting training job to Vertex AI..."
