@@ -29,7 +29,7 @@ df -h /cache
 
 # Download all data to local SSD RAID
 echo "⏬ Starting data download..."
-gsutil -m cp -r "${DATA_BUCKET}" "${CACHE_DIR}/"
+gcloud storage cp --recursive "${DATA_BUCKET}" "${CACHE_DIR}/"
 
 # Check if download was successful
 if [ $? -eq 0 ]; then
@@ -63,7 +63,7 @@ if [ -d "${ACTUAL_DATA_DIR}/checkpoints" ]; then
         echo "📁 Uploading checkpoint directory: $RUN_DIR_NAME"
         
         # Upload the specific run directory
-        gsutil -m cp -r "$CHECKPOINT_RUN_DIR" "${OUTPUT_BUCKET}/"
+        gcloud storage cp --recursive "$CHECKPOINT_RUN_DIR" "${OUTPUT_BUCKET}/"
         
         echo "✅ Checkpoints uploaded to: ${OUTPUT_BUCKET}/${RUN_DIR_NAME}/"
     else
