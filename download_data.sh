@@ -5,6 +5,11 @@ set -e  # Exit on any error
 echo "🚀 Starting ACT Training Job"
 echo "================================"
 
+# --- Environment Sanity Check ---
+echo "🐍 Checking Python package versions..."
+python -c "import numpy; import cv2; print(f'✅ NumPy version: {numpy.__version__}')"
+echo "--------------------------------"
+
 # Parse environment variables
 DATA_BUCKET=${DATA_BUCKET:-"gs://mauricearm-act-data"}
 OUTPUT_BUCKET=${OUTPUT_BUCKET:-"gs://mauricearm-act-outputs"}
