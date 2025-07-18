@@ -30,9 +30,9 @@ def cleanup():
     """Clean up the distributed environment."""
     dist.destroy_process_group()
 
-def convert_data_always():
+def convert_data_always(data_dir):
     """Always convert HDF5 data to WebDataset format (before distributed training)."""
-    DATA_DIR = "/home/vignesh/raid/PaperMulti_1_2_Filtered"
+    DATA_DIR = data_dir
     WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
     SHARD_SIZE = 1000
     
@@ -70,8 +70,8 @@ def train_ddp(rank, world_size, args, webd_dir):
     
     # --- Configuration ---
     # Data parameters
-    DATA_DIR = "/home/vignesh/raid/PaperMulti_1_2_Filtered"
-    CHUNK_SIZE = 30
+    DATA_DIR = args.data_dir
+    CHUNK_SIZE = args.chunk_size
     TRAIN_VAL_SPLIT = 0.9
     BATCH_SIZE = 96
     NUM_WORKERS = 4
@@ -115,10 +115,10 @@ def train_ddp(rank, world_size, args, webd_dir):
     USE_VAE = True
 
     # Training parameters
-    MAX_STEPS = 15000  # 20000 / 4
-    LEARNING_RATE = 5e-5
+    MAX_STEPS = args.max_steps
+    LEARNING_RATE = args.learning_rate
     WEIGHT_DECAY = 5e-4
-    LEARNING_RATE_BACKBONE = 5e-5
+    LEARNING_RATE_BACKBONE = args.learning_rate_backbone
     
     # Calculate checkpoint interval for exactly 10 checkpoints
     CHECKPOINT_INTERVAL = MAX_STEPS // 10
@@ -467,6 +467,17 @@ def main():
     parser = argparse.ArgumentParser(description='Distributed ACT Training')
     parser.add_argument('--world_size', type=int, default=None, 
                         help='Number of GPUs to use (default: all available)')
+    parser.add_argument('--data_dir', type=str, 
+                        default="/home/vignesh/raid/PaperMulti_1_2_Filtered",
+                        help='Path to the HDF5 dataset directory')
+    parser.add_argument('--chunk_size', type=int, default=30,
+                        help='Action sequence length / chunk size')
+    parser.add_argument('--max_steps', type=int, default=15000,
+                        help='Maximum number of training steps')
+    parser.add_argument('--learning_rate', type=float, default=5e-5,
+                        help='Main learning rate')
+    parser.add_argument('--learning_rate_backbone', type=float, default=5e-5,
+                        help='Learning rate for vision backbone')
     args = parser.parse_args()
     
     # Get number of available GPUs
@@ -480,7 +491,7 @@ def main():
         return
     
     # Always convert data BEFORE starting distributed training
-    conversion_success, webd_dir = convert_data_always()
+    conversion_success, webd_dir = convert_data_always(args.data_dir)
     
     if not conversion_success:
         print("❌ Failed to convert data. Exiting...")
@@ -488,6 +499,12 @@ def main():
     
     print(f"Starting distributed training on {world_size} GPUs")
     print(f"Using WebDataset directory: {webd_dir}")
+    print(f"Configuration:")
+    print(f"  Data directory: {args.data_dir}")
+    print(f"  Chunk size: {args.chunk_size}")
+    print(f"  Max steps: {args.max_steps}")
+    print(f"  Learning rate: {args.learning_rate}")
+    print(f"  Learning rate backbone: {args.learning_rate_backbone}")
     
     # Spawn processes for distributed training, passing the WebDataset directory
     mp.spawn(train_ddp, args=(world_size, args, webd_dir), nprocs=world_size, join=True)
