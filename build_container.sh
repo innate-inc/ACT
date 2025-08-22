@@ -3,7 +3,7 @@ set -e
 
 # Set your project details
 PROJECT_ID="mauricearm"
-IMAGE_NAME="act-training"
+IMAGE_NAME="act-training-test"
 TAG="latest"
 REGION="us-east5"
 

@@ -3,6 +3,7 @@ import torch.optim as optim
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim.lr_scheduler import LinearLR
 from tqdm import tqdm
 import wandb
 import os
@@ -241,6 +242,16 @@ def train_ddp(rank, world_size, args, webd_dir):
     
     optimizer = optim.AdamW(policy.module.get_optim_params(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
+    # Add learning rate warmup scheduler using LinearLR
+    warmup_steps = int(0.05 * MAX_STEPS)  # 5% of total steps for warmup
+    
+    # LinearLR: starts at start_factor * base_lr, linearly increases to base_lr over total_iters steps
+    scheduler = LinearLR(optimizer, start_factor=0.0, end_factor=1.0, total_iters=warmup_steps)
+    
+    if rank == 0:
+        print(f"Learning rate warmup: {warmup_steps} steps ({warmup_steps/MAX_STEPS*100:.1f}% of total)")
+        print(f"LR schedule: 0 → {LEARNING_RATE:.2e} over {warmup_steps} steps, then constant")
+
     # Only watch model on rank 0
     if rank == 0:
         wandb.watch(policy.module, log="all", log_freq=100)
@@ -335,6 +346,9 @@ def train_ddp(rank, world_size, args, webd_dir):
         
         optimizer.step()
         
+        # Update learning rate scheduler
+        scheduler.step()
+        
         if rank == 0:
             if device.type == 'cuda':
                 torch.cuda.synchronize()
@@ -349,11 +363,15 @@ def train_ddp(rank, world_size, args, webd_dir):
             optimizer_times.append(optimizer_time)
             total_step_times.append(total_step_time)
 
+            # Get current learning rate
+            current_lr = scheduler.get_last_lr()[0]
+
             # Log metrics to WandB
             wandb.log({
                 "train/total_loss": loss.item(),
                 "train/l1_loss": loss_dict.get("l1_loss", 0),
                 "train/kld_loss": loss_dict.get("kld_loss", 0),
+                "train/learning_rate": current_lr,
                 "timing/batch_load_ms": batch_load_time * 1000,
                 "timing/forward_ms": forward_time * 1000,
                 "timing/backward_ms": backward_time * 1000,
@@ -372,6 +390,7 @@ def train_ddp(rank, world_size, args, webd_dir):
                 loss=f"{loss.item():.4f}",
                 l1=f"{loss_dict.get('l1_loss', 0):.4f}",
                 kld=f"{loss_dict.get('kld_loss', 0):.4f}",
+                lr=f"{current_lr:.2e}",
                 step_ms=f"{total_step_time*1000:.1f}",
                 val_loss=latest_val_avg_loss,
                 refresh=True
