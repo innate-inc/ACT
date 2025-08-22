@@ -10,7 +10,13 @@ def create_training_job(
     image_uri: str,
     data_path: str,
     output_path: str,
-    job_name: Optional[str] = None
+    job_name: Optional[str] = None,
+    # Training hyperparameters
+    max_steps: int = 15000,
+    learning_rate: float = 5e-5,
+    learning_rate_backbone: float = 1e-5,
+    chunk_size: int = 30,
+    world_size: Optional[int] = None
 ):
     """Create and submit a Vertex AI training job."""
     
@@ -28,21 +34,26 @@ def create_training_job(
         staging_bucket=output_path,
     )
     
+    # Auto-detect world_size from accelerator_count if not specified
+    accelerator_count = 4  # or make this configurable too
+    if world_size is None:
+        world_size = accelerator_count
+    
     # Run the training job
     job.run(
-        # The container will handle data download and training
-        # Pass training arguments after the download script
         args=[
-            "--max_steps", "15000",
-            "--learning_rate", "5e-5",
-            "--chunk_size", "30"
+            "--max_steps", str(max_steps),
+            "--learning_rate", str(learning_rate),
+            "--learning_rate_backbone", str(learning_rate_backbone),
+            "--chunk_size", str(chunk_size),
+            "--world_size", str(world_size)
         ],
         # This is where outputs (checkpoints, logs) will be saved
         base_output_dir=output_path,
         # Machine configuration - your powerful specs!
         machine_type="a2-ultragpu-4g",           # 4x A100 80GB beast!
         accelerator_type="NVIDIA_A100_80GB",
-        accelerator_count=4,
+        accelerator_count=accelerator_count,
         # Disk configuration
         boot_disk_type="pd-ssd",
         boot_disk_size_gb=100,
@@ -79,6 +90,13 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", required=True, help="GCS path for outputs (e.g., gs://your-bucket/outputs)")
     parser.add_argument("--job_name", help="Job name")
     
+    # Training hyperparameters
+    parser.add_argument("--max_steps", type=int, default=15000, help="Maximum training steps")
+    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Main learning rate")
+    parser.add_argument("--learning_rate_backbone", type=float, default=1e-5, help="Backbone learning rate")
+    parser.add_argument("--chunk_size", type=int, default=30, help="Action sequence length")
+    parser.add_argument("--world_size", type=int, help="Number of GPUs (default: auto from accelerator_count)")
+    
     args = parser.parse_args()
     
     job = create_training_job(
@@ -87,5 +105,10 @@ if __name__ == "__main__":
         image_uri=args.image_uri,
         data_path=args.data_path,
         output_path=args.output_path,
-        job_name=args.job_name
+        job_name=args.job_name,
+        max_steps=args.max_steps,
+        learning_rate=args.learning_rate,
+        learning_rate_backbone=args.learning_rate_backbone,
+        chunk_size=args.chunk_size,
+        world_size=args.world_size
     ) 
