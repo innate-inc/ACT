@@ -246,11 +246,12 @@ def train_ddp(rank, world_size, args, webd_dir):
     warmup_steps = int(0.05 * MAX_STEPS)  # 5% of total steps for warmup
     
     # LinearLR: starts at start_factor * base_lr, linearly increases to base_lr over total_iters steps
-    scheduler = LinearLR(optimizer, start_factor=0.0, end_factor=1.0, total_iters=warmup_steps)
+    # Note: start_factor must be > 0, so we use 0.01 for effective warmup
+    scheduler = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps)
     
     if rank == 0:
         print(f"Learning rate warmup: {warmup_steps} steps ({warmup_steps/MAX_STEPS*100:.1f}% of total)")
-        print(f"LR schedule: 0 → {LEARNING_RATE:.2e} over {warmup_steps} steps, then constant")
+        print(f"LR schedule: {LEARNING_RATE*0.01:.2e} → {LEARNING_RATE:.2e} over {warmup_steps} steps, then constant")
 
     # Only watch model on rank 0
     if rank == 0:
@@ -285,11 +286,12 @@ def train_ddp(rank, world_size, args, webd_dir):
         optimizer_times = []
         total_step_times = []
     
-    while step < MAX_STEPS:
-        if rank == 0:
-            step_start_time = time.time()
-        
-        policy.train()
+    try:
+        while step < MAX_STEPS:
+            if rank == 0:
+                step_start_time = time.time()
+            
+            policy.train()
         
         # 1. Batch Loading
         if rank == 0:
@@ -474,13 +476,15 @@ def train_ddp(rank, world_size, args, webd_dir):
             torch.save(policy.module.state_dict(), checkpoint_path)
             overall_pbar.write(f"Saved checkpoint: {checkpoint_path}")
 
-    # Cleanup
-    if rank == 0:
-        overall_pbar.close()
-        print("Training finished.")
-        wandb.finish()
-    
-    cleanup()
+    finally:
+        # Cleanup - always execute even if an exception occurs
+        if rank == 0:
+            if 'overall_pbar' in locals():
+                overall_pbar.close()
+            print("Training finished.")
+            wandb.finish()
+        
+        cleanup()
 
 def main():
     parser = argparse.ArgumentParser(description='Distributed ACT Training')
