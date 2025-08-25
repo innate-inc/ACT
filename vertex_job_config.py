@@ -12,9 +12,9 @@ def create_training_job(
     output_path: str,
     job_name: Optional[str] = None,
     # Training hyperparameters
-    max_steps: int = 15000,
-    learning_rate: float = 5e-5,
-    learning_rate_backbone: float = 1e-5,
+    max_steps: int = 20000,
+    learning_rate: float = 5e-4,
+    learning_rate_backbone: float = 5e-4,
     chunk_size: int = 30,
     world_size: Optional[int] = None
 ):
