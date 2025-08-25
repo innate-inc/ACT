@@ -293,188 +293,188 @@ def train_ddp(rank, world_size, args, webd_dir):
             
             policy.train()
         
-        # 1. Batch Loading
-        if rank == 0:
-            batch_load_start = time.time()
-        
-        try:
-            batch = next(train_iter)
-        except StopIteration:
-            # Reset iterator when dataset is exhausted
-            train_iter = iter(train_dataloader)
-            batch = next(train_iter)
+            # 1. Batch Loading
             if rank == 0:
-                overall_pbar.write(f"Completed one pass through dataset at step {step}")
-        
-        # Move batch to device
-        batch_device = {}
-        for key, tensor in batch.items():
-            if isinstance(tensor, torch.Tensor):
-                batch_device[key] = tensor.to(device)
-            else:
-                batch_device[key] = tensor
-        
-        if rank == 0:
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            batch_load_time = time.time() - batch_load_start
-        
-        # 2. Forward Pass
-        if rank == 0:
-            forward_start = time.time()
-        
-        loss, loss_dict = policy(batch_device)
-        
-        if rank == 0:
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            forward_time = time.time() - forward_start
-        
-        # 3. Backward Pass
-        if rank == 0:
-            backward_start = time.time()
-        
-        optimizer.zero_grad()
-        loss.backward()
-        
-        if rank == 0:
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            backward_time = time.time() - backward_start
-        
-        # 4. Optimizer Update
-        if rank == 0:
-            optimizer_start = time.time()
-        
-        optimizer.step()
-        
-        # Update learning rate scheduler
-        scheduler.step()
-        
-        if rank == 0:
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            optimizer_time = time.time() - optimizer_start
+                batch_load_start = time.time()
             
-            total_step_time = time.time() - step_start_time
+            try:
+                batch = next(train_iter)
+            except StopIteration:
+                # Reset iterator when dataset is exhausted
+                train_iter = iter(train_dataloader)
+                batch = next(train_iter)
+                if rank == 0:
+                    overall_pbar.write(f"Completed one pass through dataset at step {step}")
             
-            # Store timing data
-            batch_load_times.append(batch_load_time)
-            forward_times.append(forward_time)
-            backward_times.append(backward_time)
-            optimizer_times.append(optimizer_time)
-            total_step_times.append(total_step_time)
-
-            # Get current learning rate
-            current_lr = scheduler.get_last_lr()[0]
-
-            # Log metrics to WandB
-            wandb.log({
-                "train/total_loss": loss.item(),
-                "train/l1_loss": loss_dict.get("l1_loss", 0),
-                "train/kld_loss": loss_dict.get("kld_loss", 0),
-                "train/learning_rate": current_lr,
-                "timing/batch_load_ms": batch_load_time * 1000,
-                "timing/forward_ms": forward_time * 1000,
-                "timing/backward_ms": backward_time * 1000,
-                "timing/optimizer_ms": optimizer_time * 1000,
-                "timing/total_step_ms": total_step_time * 1000,
-                "step": step
-            })
-        
-        step += 1
-        
-        if rank == 0:
-            overall_pbar.update(1)
+            # Move batch to device
+            batch_device = {}
+            for key, tensor in batch.items():
+                if isinstance(tensor, torch.Tensor):
+                    batch_device[key] = tensor.to(device)
+                else:
+                    batch_device[key] = tensor
             
-            # Update progress bar postfix with timing info
-            overall_pbar.set_postfix(
-                loss=f"{loss.item():.4f}",
-                l1=f"{loss_dict.get('l1_loss', 0):.4f}",
-                kld=f"{loss_dict.get('kld_loss', 0):.4f}",
-                lr=f"{current_lr:.2e}",
-                step_ms=f"{total_step_time*1000:.1f}",
-                val_loss=latest_val_avg_loss,
-                refresh=True
-            )
+            if rank == 0:
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
+                batch_load_time = time.time() - batch_load_start
             
-            # Print detailed timing every 100 steps
-            if step % 100 == 0:
-                avg_batch_load = sum(batch_load_times[-100:]) / len(batch_load_times[-100:]) * 1000
-                avg_forward = sum(forward_times[-100:]) / len(forward_times[-100:]) * 1000
-                avg_backward = sum(backward_times[-100:]) / len(backward_times[-100:]) * 1000
-                avg_optimizer = sum(optimizer_times[-100:]) / len(optimizer_times[-100:]) * 1000
-                avg_total = sum(total_step_times[-100:]) / len(total_step_times[-100:]) * 1000
+            # 2. Forward Pass
+            if rank == 0:
+                forward_start = time.time()
+            
+            loss, loss_dict = policy(batch_device)
+            
+            if rank == 0:
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
+                forward_time = time.time() - forward_start
+            
+            # 3. Backward Pass
+            if rank == 0:
+                backward_start = time.time()
+            
+            optimizer.zero_grad()
+            loss.backward()
+            
+            if rank == 0:
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
+                backward_time = time.time() - backward_start
+            
+            # 4. Optimizer Update
+            if rank == 0:
+                optimizer_start = time.time()
+            
+            optimizer.step()
+            
+            # Update learning rate scheduler
+            scheduler.step()
+            
+            if rank == 0:
+                if device.type == 'cuda':
+                    torch.cuda.synchronize()
+                optimizer_time = time.time() - optimizer_start
                 
-                overall_pbar.write(
-                    f"Step {step} - Avg timing (last 100 steps): "
-                    f"Batch: {avg_batch_load:.1f}ms, "
-                    f"Forward: {avg_forward:.1f}ms, "
-                    f"Backward: {avg_backward:.1f}ms, "
-                    f"Optimizer: {avg_optimizer:.1f}ms, "
-                    f"Total: {avg_total:.1f}ms"
+                total_step_time = time.time() - step_start_time
+                
+                # Store timing data
+                batch_load_times.append(batch_load_time)
+                forward_times.append(forward_time)
+                backward_times.append(backward_time)
+                optimizer_times.append(optimizer_time)
+                total_step_times.append(total_step_time)
+
+                # Get current learning rate
+                current_lr = scheduler.get_last_lr()[0]
+
+                # Log metrics to WandB
+                wandb.log({
+                    "train/total_loss": loss.item(),
+                    "train/l1_loss": loss_dict.get("l1_loss", 0),
+                    "train/kld_loss": loss_dict.get("kld_loss", 0),
+                    "train/learning_rate": current_lr,
+                    "timing/batch_load_ms": batch_load_time * 1000,
+                    "timing/forward_ms": forward_time * 1000,
+                    "timing/backward_ms": backward_time * 1000,
+                    "timing/optimizer_ms": optimizer_time * 1000,
+                    "timing/total_step_ms": total_step_time * 1000,
+                    "step": step
+                })
+            
+            step += 1
+            
+            if rank == 0:
+                overall_pbar.update(1)
+                
+                # Update progress bar postfix with timing info
+                overall_pbar.set_postfix(
+                    loss=f"{loss.item():.4f}",
+                    l1=f"{loss_dict.get('l1_loss', 0):.4f}",
+                    kld=f"{loss_dict.get('kld_loss', 0):.4f}",
+                    lr=f"{current_lr:.2e}",
+                    step_ms=f"{total_step_time*1000:.1f}",
+                    val_loss=latest_val_avg_loss,
+                    refresh=True
                 )
-
-        # --- Validation Step (only on rank 0) ---
-        if step % 100 == 0:
-            # Synchronize all ranks before validation
-            dist.barrier()
-            
-            if rank == 0:
-                val_start_time = time.time()
-                policy.eval()
                 
-                with torch.no_grad():
-                    try:
-                        # Time batch loading (no iterator creation needed)
-                        batch_load_start = time.time()
-                        batch_val = next(val_iter)
-                        batch_device_val = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch_val.items()}
-                        if device.type == 'cuda':
-                            torch.cuda.synchronize()
-                        batch_load_time = time.time() - batch_load_start
-                        
-                        # Time forward pass
-                        forward_start = time.time()
-                        loss, loss_dict = policy(batch_device_val)
-                        if device.type == 'cuda':
-                            torch.cuda.synchronize()
-                        forward_time = time.time() - forward_start
-                        
-                        # Single batch validation metrics
-                        latest_val_avg_loss = f"{loss.item():.4f}"
-                        latest_val_avg_l1_loss = f"{loss_dict.get('l1_loss', 0):.4f}"
-                        latest_val_avg_kld_loss = f"{loss_dict.get('kld_loss', 0):.4f}"
+                # Print detailed timing every 100 steps
+                if step % 100 == 0:
+                    avg_batch_load = sum(batch_load_times[-100:]) / len(batch_load_times[-100:]) * 1000
+                    avg_forward = sum(forward_times[-100:]) / len(forward_times[-100:]) * 1000
+                    avg_backward = sum(backward_times[-100:]) / len(backward_times[-100:]) * 1000
+                    avg_optimizer = sum(optimizer_times[-100:]) / len(optimizer_times[-100:]) * 1000
+                    avg_total = sum(total_step_times[-100:]) / len(total_step_times[-100:]) * 1000
+                    
+                    overall_pbar.write(
+                        f"Step {step} - Avg timing (last 100 steps): "
+                        f"Batch: {avg_batch_load:.1f}ms, "
+                        f"Forward: {avg_forward:.1f}ms, "
+                        f"Backward: {avg_backward:.1f}ms, "
+                        f"Optimizer: {avg_optimizer:.1f}ms, "
+                        f"Total: {avg_total:.1f}ms"
+                    )
 
-                        total_val_time = time.time() - val_start_time
-                        
-                        wandb.log({
-                            "val/avg_total_loss": loss.item(),
-                            "val/avg_l1_loss": loss_dict.get("l1_loss", 0),
-                            "val/avg_kld_loss": loss_dict.get("kld_loss", 0),
-                            "val_timing/batch_load_ms": batch_load_time * 1000,
-                            "val_timing/forward_ms": forward_time * 1000,
-                            "val_timing/total_val_ms": total_val_time * 1000,
-                            "step": step
-                        })
-                        
-                        overall_pbar.write(f"Validation at step {step}: Loss={loss.item():.4f}, "
-                                         f"Total={total_val_time*1000:.1f}ms (load={batch_load_time*1000:.1f}ms, forward={forward_time*1000:.1f}ms)")
-                        
-                    except StopIteration:
-                        # Reset validation iterator when dataset is exhausted
-                        val_iter = iter(val_dataloader)
-                        overall_pbar.write(f"Validation dataset exhausted at step {step}, resetting iterator")
-                    except Exception as e:
-                        overall_pbar.write(f"Validation failed at step {step}: {e}")
-                        wandb.log({"val/error": str(e), "step": step})
+            # --- Validation Step (only on rank 0) ---
+            if step % 100 == 0:
+                # Synchronize all ranks before validation
+                dist.barrier()
+                
+                if rank == 0:
+                    val_start_time = time.time()
+                    policy.eval()
+                    
+                    with torch.no_grad():
+                        try:
+                            # Time batch loading (no iterator creation needed)
+                            batch_load_start = time.time()
+                            batch_val = next(val_iter)
+                            batch_device_val = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch_val.items()}
+                            if device.type == 'cuda':
+                                torch.cuda.synchronize()
+                            batch_load_time = time.time() - batch_load_start
+                            
+                            # Time forward pass
+                            forward_start = time.time()
+                            loss, loss_dict = policy(batch_device_val)
+                            if device.type == 'cuda':
+                                torch.cuda.synchronize()
+                            forward_time = time.time() - forward_start
+                            
+                            # Single batch validation metrics
+                            latest_val_avg_loss = f"{loss.item():.4f}"
+                            latest_val_avg_l1_loss = f"{loss_dict.get('l1_loss', 0):.4f}"
+                            latest_val_avg_kld_loss = f"{loss_dict.get('kld_loss', 0):.4f}"
 
-        # Save model checkpoint (only on rank 0)
-        if (step % CHECKPOINT_INTERVAL == 0 or step == MAX_STEPS) and rank == 0:
-            checkpoint_name = f"act_policy_step_{step}.pth"
-            checkpoint_path = os.path.join(CHECKPOINT_DIR, checkpoint_name)
-            torch.save(policy.module.state_dict(), checkpoint_path)
-            overall_pbar.write(f"Saved checkpoint: {checkpoint_path}")
+                            total_val_time = time.time() - val_start_time
+                            
+                            wandb.log({
+                                "val/avg_total_loss": loss.item(),
+                                "val/avg_l1_loss": loss_dict.get("l1_loss", 0),
+                                "val/avg_kld_loss": loss_dict.get("kld_loss", 0),
+                                "val_timing/batch_load_ms": batch_load_time * 1000,
+                                "val_timing/forward_ms": forward_time * 1000,
+                                "val_timing/total_val_ms": total_val_time * 1000,
+                                "step": step
+                            })
+                            
+                            overall_pbar.write(f"Validation at step {step}: Loss={loss.item():.4f}, "
+                                             f"Total={total_val_time*1000:.1f}ms (load={batch_load_time*1000:.1f}ms, forward={forward_time*1000:.1f}ms)")
+                            
+                        except StopIteration:
+                            # Reset validation iterator when dataset is exhausted
+                            val_iter = iter(val_dataloader)
+                            overall_pbar.write(f"Validation dataset exhausted at step {step}, resetting iterator")
+                        except Exception as e:
+                            overall_pbar.write(f"Validation failed at step {step}: {e}")
+                            wandb.log({"val/error": str(e), "step": step})
+
+            # Save model checkpoint (only on rank 0)
+            if (step % CHECKPOINT_INTERVAL == 0 or step == MAX_STEPS) and rank == 0:
+                checkpoint_name = f"act_policy_step_{step}.pth"
+                checkpoint_path = os.path.join(CHECKPOINT_DIR, checkpoint_name)
+                torch.save(policy.module.state_dict(), checkpoint_path)
+                overall_pbar.write(f"Saved checkpoint: {checkpoint_path}")
 
     finally:
         # Cleanup - always execute even if an exception occurs
