@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch
 import torch.optim as optim
 import torch.distributed as dist
@@ -468,7 +469,7 @@ def main():
     parser.add_argument('--world_size', type=int, default=None, 
                         help='Number of GPUs to use (default: all available)')
     parser.add_argument('--data_dir', type=str, 
-                        default="/home/vignesh/raid/PaperMulti_1_2_Filtered",
+                        default="/home/vignesh/raid/socks1wed_socks2wed_filt_merged",
                         help='Path to the HDF5 dataset directory')
     parser.add_argument('--chunk_size', type=int, default=30,
                         help='Action sequence length / chunk size')
@@ -491,11 +492,7 @@ def main():
         return
     
     # Always convert data BEFORE starting distributed training
-    conversion_success, webd_dir = convert_data_always(args.data_dir)
-    
-    if not conversion_success:
-        print("❌ Failed to convert data. Exiting...")
-        return
+    webd_dir = os.path.join(args.data_dir, "webdataset")
     
     print(f"Starting distributed training on {world_size} GPUs")
     print(f"Using WebDataset directory: {webd_dir}")

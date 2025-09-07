@@ -545,12 +545,30 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
     
     return dataset_stats
 
+def split_by_node(urls):
+    """Split URLs by node (rank) for distributed training."""
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        rank = torch.distributed.get_rank()
+        world_size = torch.distributed.get_world_size()
+        urls = list(urls)
+        return iter(urls[rank::world_size])
+    return urls
+
+def split_by_worker(urls):
+    """Split URLs by worker within each node."""
+    worker_info = torch.utils.data.get_worker_info()
+    if worker_info is None:
+        return urls
+    else:
+        urls = list(urls)
+        return iter(urls[worker_info.id::worker_info.num_workers])
+
 def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8, 
                               train_val_split=0.8, num_workers=4, 
                               prefetch_factor=2, seed=42, compute_stats_from_all=True):
     """
     Initialize WebDataset-based training and validation dataloaders.
-    Uses WebDataset's built-in splitting mechanism.
+    Uses WebDataset's built-in splitting mechanism with proper distributed sharding.
     """
     
     # Set random seed for reproducible splits
@@ -594,22 +612,18 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     train_split_fn = partial(train_split_filter, split_ratio=train_val_split)
     val_split_fn = partial(val_split_filter, split_ratio=train_val_split)
     
-    # Create train dataset
+    # Create train dataset with proper distributed sharding
     train_dataset = (
-        wds.WebDataset(full_pattern, shardshuffle=True)
-        .split_by_node()
-        .split_by_worker()
+        wds.WebDataset(full_pattern, shardshuffle=True, nodesplitter=split_by_node, workersplitter=split_by_worker)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(train_split_fn)
         .map(decode_fn)
     )
     
-    # Create val dataset
+    # Create val dataset with proper distributed sharding
     val_dataset = (
-        wds.WebDataset(full_pattern, shardshuffle=True)
-        .split_by_node()
-        .split_by_worker()
+        wds.WebDataset(full_pattern, shardshuffle=True, nodesplitter=split_by_node, workersplitter=split_by_worker)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(val_split_fn)
