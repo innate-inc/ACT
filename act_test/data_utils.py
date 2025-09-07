@@ -597,6 +597,8 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     # Create train dataset
     train_dataset = (
         wds.WebDataset(full_pattern, shardshuffle=True)
+        .split_by_node()
+        .split_by_worker()
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(train_split_fn)
@@ -606,6 +608,8 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     # Create val dataset
     val_dataset = (
         wds.WebDataset(full_pattern, shardshuffle=True)
+        .split_by_node()
+        .split_by_worker()
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(val_split_fn)
