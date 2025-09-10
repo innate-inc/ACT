@@ -19,7 +19,6 @@ import glob
 from torchvision import transforms
 from functools import partial
 import re
-import torch.distributed as dist
 
 class EpisodicHDF5DatasetRAM(Dataset):
     # --- Hardcoded Values Based on User Guarantees ---
@@ -353,8 +352,7 @@ class WebDatasetStreaming:
         )
         return dataset
 
-# These global functions are no longer needed with proper distributed splitting
-# but keeping them for backward compatibility
+# Global picklable functions for WebDataset
 def train_split_filter(x, split_ratio=0.8):
     """Picklable filter function for training split."""
     return np.random.random() < split_ratio
@@ -551,7 +549,8 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
                               train_val_split=0.8, num_workers=4, 
                               prefetch_factor=2, seed=42, compute_stats_from_all=True):
     """
-    Initialize WebDataset-based training and validation dataloaders with proper distributed splitting.
+    Initialize WebDataset-based training and validation dataloaders.
+    Uses WebDataset's built-in splitting mechanism.
     """
     
     # Set random seed for reproducible splits
@@ -588,71 +587,30 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     
     print(f"Using dataset pattern: {full_pattern}")
     
-    # Create decoder function
+    # Create decode functions - no augmentation parameters
     decode_fn = WebDatasetDecoder(chunk_size)
     
-    # === UPDATED: Proper distributed splitting ===
-    
-    # Create base dataset with shard shuffling
-    base_dataset = wds.WebDataset(full_pattern, shardshuffle=True)
-    
-    # Apply distributed splitting
-    print("🌐 Applying distributed data splitting...")
-    
-    # Check if we're in distributed training mode
-    if dist.is_initialized():
-        print("  📡 Distributed training detected - applying node splitting")
-        base_dataset = wds.split_by_node(base_dataset)
-    
-    # Always apply worker splitting (works for both single and multi-worker)
-    print("  👥 Applying worker splitting")
-    distributed_dataset = wds.split_by_worker(base_dataset)
-    
-    # For train/val split, we'll use file-based splitting instead of random filtering
-    # Split the files first, then create separate datasets
-    num_train_files = int(len(all_files) * train_val_split)
-    train_files = all_files[:num_train_files]
-    val_files = all_files[num_train_files:]
-    
-    print(f"📊 Data split: {len(train_files)} train files, {len(val_files)} val files")
+    # Create split functions using functional approach
+    train_split_fn = partial(train_split_filter, split_ratio=train_val_split)
+    val_split_fn = partial(val_split_filter, split_ratio=train_val_split)
     
     # Create train dataset
-    if len(train_files) == 1:
-        train_pattern = train_files[0]
-    else:
-        train_pattern = "{" + ",".join(train_files) + "}"
-    
-    train_base = wds.WebDataset(train_pattern, shardshuffle=True)
-    if dist.is_initialized():
-        train_base = wds.split_by_node(train_base)
-    train_distributed = wds.split_by_worker(train_base)
-    
     train_dataset = (
-        train_distributed
+        wds.WebDataset(full_pattern, shardshuffle=True)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
+        .select(train_split_fn)
         .map(decode_fn)
     )
     
     # Create val dataset
-    val_dataset = None
-    if val_files:
-        if len(val_files) == 1:
-            val_pattern = val_files[0]
-        else:
-            val_pattern = "{" + ",".join(val_files) + "}"
-        
-        val_base = wds.WebDataset(val_pattern, shardshuffle=False)  # No shuffle for validation
-        if dist.is_initialized():
-            val_base = wds.split_by_node(val_base)
-        val_distributed = wds.split_by_worker(val_base)
-        
-        val_dataset = (
-            val_distributed
-            .decode("pil")
-            .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
-            .map(decode_fn)
-        )
+    val_dataset = (
+        wds.WebDataset(full_pattern, shardshuffle=True)
+        .decode("pil")
+        .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
+        .select(val_split_fn)
+        .map(decode_fn)
+    )
     
     # Create dataloaders
     train_dataloader = torch.utils.data.DataLoader(
@@ -665,32 +623,20 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
         drop_last=True
     )
     
-    val_dataloader = None
-    if val_dataset:
-        val_dataloader = torch.utils.data.DataLoader(
-            val_dataset,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            pin_memory=True,
-            persistent_workers=True if num_workers > 0 else False,
-            prefetch_factor=prefetch_factor if num_workers > 0 else 2,
-            drop_last=False
-        )
-    else:
-        # Create empty dataloader for compatibility
-        from torch.utils.data import Dataset
-        class EmptyDataset(Dataset):
-            def __len__(self): return 0
-            def __getitem__(self, idx): raise IndexError
-        
-        val_dataloader = torch.utils.data.DataLoader(EmptyDataset(), batch_size=batch_size)
+    val_dataloader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=prefetch_factor if num_workers > 0 else 2,
+        drop_last=False
+    )
     
     # Calculate dataset statistics from training data
     print("Calculating dataset statistics...")
     max_samples = None if compute_stats_from_all else 1000
     dataset_stats = calculate_webdataset_stats(train_dataloader, max_samples=max_samples)
-    
-    print("✅ WebDataset initialization complete with proper distributed splitting!")
     
     return train_dataloader, val_dataloader, dataset_stats
 
