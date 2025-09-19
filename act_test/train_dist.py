@@ -20,6 +20,11 @@ def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
     
+    # Set WebDataset environment variables
+    os.environ['RANK'] = str(rank)
+    os.environ['WORLD_SIZE'] = str(world_size)
+    os.environ['LOCAL_RANK'] = str(rank)
+    
     # Initialize the process group
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
     
@@ -190,7 +195,9 @@ def train_ddp(rank, world_size, args, webd_dir):
             train_val_split=TRAIN_VAL_SPLIT,
             num_workers=NUM_WORKERS,
             prefetch_factor=2,
-            seed=42 + rank
+            seed=42,  # ✅ Use base seed since rank is handled internally
+            rank=rank,  # ✅ Add rank
+            world_size=world_size
         )
     except (FileNotFoundError, ValueError) as e:
         if rank == 0:

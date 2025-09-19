@@ -100,7 +100,7 @@ def create_rank_dataloader(rank, world_size, webd_dir, chunk_size=30, batch_size
 def test_batch_distribution():
     """Test if different ranks are getting different batches."""
     
-    webd_dir = "/media/vignesh/External4TB/socks1wed_socks2wed_filt_merged_webdataset"
+    webd_dir = "/home/vignesh/raid/socks1wed_socks2wed_filt_merged/webdataset"
     num_ranks = 4
     num_batches_to_test = 5
     chunk_size = 30

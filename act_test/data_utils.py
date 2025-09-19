@@ -20,6 +20,53 @@ from torchvision import transforms
 from functools import partial
 import re
 
+def split_files_train_val(all_files, val_ratio=0.2, min_val_files=1):
+    """Split files into train and validation sets."""
+    total_files = len(all_files)
+    
+    # Calculate number of validation files (at least min_val_files)
+    num_val_files = max(min_val_files, int(total_files * val_ratio))
+    num_train_files = total_files - num_val_files
+    
+    # Take last files for validation (they're sorted)
+    train_files = all_files[:num_train_files]
+    val_files = all_files[num_train_files:]
+    
+    return train_files, val_files
+
+def create_webdataset_pattern(files):
+    """Create WebDataset pattern from list of files."""
+    if len(files) == 0:
+        raise ValueError("Cannot create pattern from empty file list")
+    elif len(files) == 1:
+        return files[0]
+    else:
+        # Try to create range pattern if files are sequential
+        first_file = files[0]
+        last_file = files[-1]
+        
+        match_first = re.search(r'train-(\d+)\.tar', first_file)
+        match_last = re.search(r'train-(\d+)\.tar', last_file)
+        
+        if match_first and match_last:
+            start_num = int(match_first.group(1))
+            end_num = int(match_last.group(1))
+            
+            # Check if files are truly sequential
+            expected_nums = set(range(start_num, end_num + 1))
+            actual_nums = set()
+            for f in files:
+                match = re.search(r'train-(\d+)\.tar', f)
+                if match:
+                    actual_nums.add(int(match.group(1)))
+            
+            if expected_nums == actual_nums:
+                base_path = first_file.replace(match_first.group(0), "train-{%05d..%05d}.tar" % (start_num, end_num))
+                return base_path
+        
+        # Fallback to comma-separated list
+        return "{" + ",".join(files) + "}"
+
 class EpisodicHDF5DatasetRAM(Dataset):
     # --- Hardcoded Values Based on User Guarantees ---
     ACTION_DIM = 10
@@ -353,13 +400,9 @@ class WebDatasetStreaming:
         return dataset
 
 # Global picklable functions for WebDataset
-def train_split_filter(x, split_ratio=0.8):
-    """Picklable filter function for training split."""
-    return np.random.random() < split_ratio
-
-def val_split_filter(x, split_ratio=0.8):
-    """Picklable filter function for validation split."""
-    return np.random.random() >= split_ratio
+# These functions are no longer needed:
+# def train_split_filter(x, split_ratio=0.8):
+# def val_split_filter(x, split_ratio=0.8):
 
 class WebDatasetDecoder:
     """Picklable decoder class for WebDataset."""
@@ -547,15 +590,21 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
 
 def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8, 
                               train_val_split=0.8, num_workers=4, 
-                              prefetch_factor=2, seed=42, compute_stats_from_all=True):
+                              prefetch_factor=2, seed=42, compute_stats_from_all=True,
+                              rank=0, world_size=1):
     """
     Initialize WebDataset-based training and validation dataloaders.
     Uses WebDataset's built-in splitting mechanism.
     """
     
+    # Set WebDataset distributed environment variables
+    os.environ['RANK'] = str(rank)
+    os.environ['WORLD_SIZE'] = str(world_size)
+
     # Set random seed for reproducible splits
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+    rank_seed = seed + rank
+    np.random.seed(rank_seed)
+    torch.manual_seed(rank_seed)
     
     # Find all .tar files and create pattern
     dataset_pattern = os.path.join(data_dir, "train-*.tar")
@@ -564,51 +613,38 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     if len(all_files) == 0:
         raise FileNotFoundError(f"No WebDataset .tar files found in {data_dir}")
     
-    print(f"Found {len(all_files)} WebDataset files")
+    print(f"Rank {rank}/{world_size}: Found {len(all_files)} WebDataset files")
     
-    # Create pattern for all files
-    if len(all_files) == 1:
-        full_pattern = all_files[0]
-    else:
-        # Create webdataset range pattern
-        first_file = all_files[0]
-        last_file = all_files[-1]
-        
-        match_first = re.search(r'train-(\d+)\.tar', first_file)
-        match_last = re.search(r'train-(\d+)\.tar', last_file)
-        
-        if match_first and match_last:
-            start_num = int(match_first.group(1))
-            end_num = int(match_last.group(1))
-            base_path = first_file.replace(match_first.group(0), "train-{%05d..%05d}.tar" % (start_num, end_num))
-            full_pattern = base_path
-        else:
-            full_pattern = "{" + ",".join(all_files) + "}"
+    # Split files into train and validation sets
+    train_files, val_files = split_files_train_val(all_files, val_ratio=0.2, min_val_files=1)
+
+    print(f"Rank {rank}/{world_size}: Train files: {len(train_files)}, Val files: {len(val_files)}")
+    print(f"Rank {rank}/{world_size}: Train range: {os.path.basename(train_files[0])} to {os.path.basename(train_files[-1])}")
+    print(f"Rank {rank}/{world_size}: Val range: {os.path.basename(val_files[0])} to {os.path.basename(val_files[-1])}")
+
+    # Create patterns for train and validation
+    train_pattern = create_webdataset_pattern(train_files)
+    val_pattern = create_webdataset_pattern(val_files)
+
+    print(f"Rank {rank}/{world_size}: Train pattern: {train_pattern}")
+    print(f"Rank {rank}/{world_size}: Val pattern: {val_pattern}")
     
-    print(f"Using dataset pattern: {full_pattern}")
-    
-    # Create decode functions - no augmentation parameters
+    # Create decode functions
     decode_fn = WebDatasetDecoder(chunk_size)
-    
-    # Create split functions using functional approach
-    train_split_fn = partial(train_split_filter, split_ratio=train_val_split)
-    val_split_fn = partial(val_split_filter, split_ratio=train_val_split)
-    
-    # Create train dataset
+
+    # Create train dataset using only train files
     train_dataset = (
-        wds.WebDataset(full_pattern, shardshuffle=True)
+        wds.WebDataset(train_pattern, shardshuffle=True, nodesplitter=wds.split_by_node)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
-        .select(train_split_fn)
         .map(decode_fn)
     )
     
-    # Create val dataset
+    # Create val dataset using only validation files  
     val_dataset = (
-        wds.WebDataset(full_pattern, shardshuffle=True)
+        wds.WebDataset(val_pattern, shardshuffle=True, nodesplitter=wds.split_by_node)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
-        .select(val_split_fn)
         .map(decode_fn)
     )
     
