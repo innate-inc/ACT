@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 import sys
 import torch
@@ -9,9 +11,9 @@ import re
 from functools import partial
 
 # Add the current directory to path so we can import local modules
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append('/home/vignesh/act_test/act_test')
 
-from data_utils import initialize_webdataset_data, train_split_filter, val_split_filter, WebDatasetDecoder
+from data_utils import train_split_filter, val_split_filter, WebDatasetDecoder
 import webdataset as wds
 
 def hash_tensor(tensor):
@@ -95,8 +97,14 @@ def create_rank_dataloader(rank, world_size, webd_dir, chunk_size=30, batch_size
     
     return train_dataloader
 
-def test_batch_distribution(webd_dir, num_ranks=4, num_batches_to_test=5, chunk_size=30, batch_size=8):
+def test_batch_distribution():
     """Test if different ranks are getting different batches."""
+    
+    webd_dir = "/media/vignesh/External4TB/socks1wed_socks2wed_filt_merged_webdataset"
+    num_ranks = 4
+    num_batches_to_test = 5
+    chunk_size = 30
+    batch_size = 8
     
     print("🧪 TESTING BATCH DISTRIBUTION ACROSS RANKS")
     print("=" * 60)
@@ -259,47 +267,8 @@ def test_batch_distribution(webd_dir, num_ranks=4, num_batches_to_test=5, chunk_
     
     return not has_issues
 
-def main():
-    """Main test function."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Test WebDataset batch distribution across ranks')
-    parser.add_argument('--webd_dir', type=str, required=True,
-                        help='Path to the WebDataset directory (containing train-*.tar files)')
-    parser.add_argument('--num_ranks', type=int, default=4,
-                        help='Number of ranks to simulate (default: 4)')
-    parser.add_argument('--num_batches', type=int, default=5,
-                        help='Number of batches to test per rank (default: 5)')
-    parser.add_argument('--batch_size', type=int, default=8,
-                        help='Batch size (default: 8)')
-    parser.add_argument('--chunk_size', type=int, default=30,
-                        help='Action chunk size (default: 30)')
-    
-    args = parser.parse_args()
-    
-    # Check if WebDataset directory exists
-    if not os.path.exists(args.webd_dir):
-        print(f"❌ WebDataset directory not found: {args.webd_dir}")
-        print("💡 Make sure you've converted your HDF5 data to WebDataset format first.")
-        return False
-    
-    # Check if there are any .tar files
-    tar_files = glob.glob(os.path.join(args.webd_dir, "train-*.tar"))
-    if not tar_files:
-        print(f"❌ No WebDataset .tar files found in: {args.webd_dir}")
-        print("💡 Make sure your WebDataset conversion completed successfully.")
-        return False
-    
-    print(f"Found {len(tar_files)} WebDataset files in {args.webd_dir}")
-    
-    # Run the test
-    success = test_batch_distribution(
-        webd_dir=args.webd_dir,
-        num_ranks=args.num_ranks,
-        num_batches_to_test=args.num_batches,
-        chunk_size=args.chunk_size,
-        batch_size=args.batch_size
-    )
+if __name__ == "__main__":
+    success = test_batch_distribution()
     
     print(f"\n{'='*60}")
     if success:
@@ -313,8 +282,3 @@ def main():
         print("   2. Implement proper distributed sampling")
         print("   3. Use DistributedSampler with WebDataset")
         print("   4. Check if shardshuffle is working correctly")
-    
-    return success
-
-if __name__ == "__main__":
-    main()
