@@ -18,6 +18,12 @@ from data_tools.webdataset import (
 )  # Import conversion function
 
 
+# Simple logging function with auto-flush for reliable logs in containerized environments
+def log(msg, **kwargs):
+    """Print with flush=True by default for immediate log output."""
+    print(msg, flush=True, **kwargs)
+
+
 def setup(rank, world_size):
     """Initialize the distributed environment."""
     os.environ["MASTER_ADDR"] = "localhost"
@@ -46,8 +52,8 @@ def convert_data_always(data_dir):
     WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
     SHARD_SIZE = 1000
 
-    print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT", flush=True)
-    print("=" * 50, flush=True)
+    log("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
+    log("=" * 50)
 
     # Remove existing WebDataset directory if it exists
     if os.path.exists(WEBD_DIR):
@@ -538,24 +544,24 @@ def main():
         help="Learning rate for vision backbone",
     )
     args = parser.parse_args()
-    print(f"✅ Arguments parsed successfully", flush=True)
-    print(f"   Data directory: {args.data_dir}", flush=True)
+    log(f"✅ Arguments parsed successfully")
+    log(f"   Data directory: {args.data_dir}")
 
     # Get number of available GPUs
-    print("🔍 Checking CUDA availability...", flush=True)
+    log("🔍 Checking CUDA availability...")
     try:
         cuda_available = torch.cuda.is_available()
-        print(f"   CUDA available: {cuda_available}", flush=True)
+        log(f"   CUDA available: {cuda_available}")
 
         if args.world_size is None:
-            print("   Detecting GPU count...", flush=True)
+            log("   Detecting GPU count...")
             world_size = torch.cuda.device_count()
-            print(f"   Detected {world_size} GPUs", flush=True)
+            log(f"   Detected {world_size} GPUs")
         else:
             world_size = args.world_size
-            print(f"   Using specified world_size: {world_size}", flush=True)
+            log(f"   Using specified world_size: {world_size}")
     except Exception as e:
-        print(f"❌ Error checking CUDA: {e}", flush=True)
+        log(f"❌ Error checking CUDA: {e}")
         raise
 
     if world_size == 0:
@@ -584,10 +590,10 @@ def main():
 
 if __name__ == "__main__":
     try:
-        print("🚀 train_dist.py: Starting main()...", flush=True)
+        log("🚀 train_dist.py: Starting main()...")
         main()
     except Exception as e:
-        print(f"❌ FATAL ERROR in train_dist.py main(): {e}", flush=True)
+        log(f"❌ FATAL ERROR in train_dist.py main(): {e}")
         import traceback
 
         traceback.print_exc()
