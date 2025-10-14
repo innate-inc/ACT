@@ -9,3 +9,6 @@ wandb/
 dist/
 build/
 act_test.egg-info/
+
+# MacOs
+.DS_Store
