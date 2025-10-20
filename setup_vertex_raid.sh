@@ -15,29 +15,86 @@ if ! command -v mdadm &> /dev/null || ! command -v mkfs.ext4 &> /dev/null; then
 fi
 
 # Check if we can run as root or have sudo access
-if [ "$EUID" -ne 0 ] && ! sudo -n true 2>/dev/null; then
-    echo "❌ This script requires root privileges to create RAID arrays"
-    echo "   Either run as root or configure sudo access"
-    exit 1
+echo "🔍 Checking permissions - EUID: $EUID, USER: $(whoami)"
+
+if [ "$EUID" -ne 0 ]; then
+    echo "🔑 Not running as root, testing sudo access..."
+    if sudo -n true 2>/dev/null; then
+        echo "✅ Sudo access confirmed"
+        SUDO="sudo"
+    else
+        echo "❌ This script requires root privileges to create RAID arrays"
+        echo "   Either run as root or configure sudo access"
+        echo "   Current user: $(whoami), EUID: $EUID"
+        echo "   Testing sudo with: sudo -n whoami"
+        sudo -n whoami 2>&1 || echo "   Sudo test failed"
+        exit 1
+    fi
+else
+    echo "✅ Running as root"
+    SUDO=""
 fi
 
-# Use sudo if not root
-SUDO=""
-if [ "$EUID" -ne 0 ]; then
-    SUDO="sudo"
-    echo "🔑 Using sudo for privileged operations..."
-fi
+echo "🔧 Will use SUDO command: '${SUDO}'"
 
 # Auto-detect available NVMe Local SSD devices
+echo "🔍 Detecting Local SSD devices..."
+echo "📋 Full lsblk output:"
+lsblk -d -o NAME,TYPE,SIZE
+
+echo ""
+echo "🔎 Filtering for NVMe disks:"
+lsblk -d -o NAME,TYPE | grep disk | grep nvme || echo "   (no nvme disks found)"
+
+echo ""
+echo "🎯 Auto-detecting Local SSDs..."
 LOCAL_SSDS=($(lsblk -d -o NAME,TYPE | grep disk | grep nvme | awk '{print "/dev/"$1}'))
 
 if [ ${#LOCAL_SSDS[@]} -eq 0 ]; then
     echo "⚠️  No Local SSDs found. Using boot disk storage."
     echo "   This is normal for local development or smaller instance types."
+    echo "   Available devices:"
+    lsblk -d -o NAME,TYPE,SIZE
     exit 0
 fi
 
 echo "📦 Found ${#LOCAL_SSDS[@]} Local SSD(s): ${LOCAL_SSDS[*]}"
+
+# Verify each device actually exists
+echo "✅ Verifying detected devices exist:"
+for device in "${LOCAL_SSDS[@]}"; do
+    if [ -b "$device" ]; then
+        echo "   ✅ $device exists"
+    else
+        echo "   ❌ $device does NOT exist!"
+    fi
+done
+
+echo ""
+echo "🔍 Investigating /dev/ directory for NVMe devices:"
+echo "📂 Contents of /dev/ matching nvme*:"
+ls -la /dev/nvme* 2>/dev/null || echo "   (no nvme* files found in /dev/)"
+
+echo ""
+echo "📂 Contents of /dev/ matching *nvme*:"
+ls -la /dev/ | grep nvme || echo "   (no nvme entries found in /dev/)"
+
+echo ""
+echo "🔍 Checking /dev/disk/by-id/ for NVMe devices:"
+ls -la /dev/disk/by-id/ | grep nvme 2>/dev/null || echo "   (no nvme entries in /dev/disk/by-id/)"
+
+echo ""
+echo "⏰ Waiting 5 seconds for device files to appear..."
+sleep 5
+
+echo "🔄 Re-checking device existence after wait:"
+for device in "${LOCAL_SSDS[@]}"; do
+    if [ -b "$device" ]; then
+        echo "   ✅ $device now exists!"
+    else
+        echo "   ❌ $device still does not exist"
+    fi
+done
 
 # Create RAID 0 array from all available Local SSDs
 echo "🛠️  Creating RAID 0 array /dev/md0..."
