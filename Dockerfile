@@ -46,7 +46,8 @@ RUN chmod +x /app/download_data.sh /app/setup_vertex_raid.sh
 RUN groupadd -r appuser && useradd --no-log-init -r -m -g appuser appuser
 
 # Configure sudo for appuser to run RAID commands without password
-RUN echo "appuser ALL=(ALL) NOPASSWD: /sbin/mdadm, /sbin/mkfs.ext4, /bin/mount, /bin/mkdir, /bin/chown, /bin/chmod" >> /etc/sudoers.d/appuser \
+# Allow broader permissions for RAID setup (since paths may vary)
+RUN echo "appuser ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/appuser \
     && chmod 0440 /etc/sudoers.d/appuser
 
 RUN chown -R appuser:appuser /app
