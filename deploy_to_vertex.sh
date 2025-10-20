@@ -11,18 +11,33 @@ fi
 PROJECT_ID="mauricearm"
 REGION="us-central1"
 IMAGE_NAME="act-training"
-TAG="latest"
+# Production version:
+# TAG="latest"
+# Test version (UNCOMMENT for RAID testing, COMMENT OUT for production):
+TAG="raid-test"
 
 # Get arguments
 DATA_GCS_PATH="$1"
 OUTPUT_GCS_PATH="$2"
 JOB_NAME="${3:-act-training-$(date +%Y%m%d-%H%M%S)}"
 
-echo "🚀 Deploying ACT Training Job"
-echo "================================"
+# Production messaging (comment out for testing):
+# echo "🚀 Deploying ACT Training Job"
+# echo "================================"
+# echo "📊 Data source: ${DATA_GCS_PATH}"
+# echo "📤 Output destination: ${OUTPUT_GCS_PATH}"
+# echo "🏷️  Job name: ${JOB_NAME}"
+# echo ""
+
+# Test messaging (comment out for production):
+echo "🧪 Deploying ACT RAID TEST Job"
+echo "==============================="
+echo "⚠️  This is a RAID TEST deployment - training is DISABLED"
+echo "🎯 Purpose: Test RAID setup and data download only"
 echo "📊 Data source: ${DATA_GCS_PATH}"
 echo "📤 Output destination: ${OUTPUT_GCS_PATH}"
 echo "🏷️  Job name: ${JOB_NAME}"
+echo "🐳 Image: gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${TAG}"
 echo ""
 
 # Validate that buckets exist
@@ -39,9 +54,13 @@ fi
 
 echo "✅ GCS paths validated successfully"
 
-# Build and push container
-echo "🐳 Building and pushing container..."
-# ./build_container.sh  # Comment out or remove this line
+# Production container building (usually commented out - container pre-built):
+# echo "🐳 Building and pushing container..."
+# ./build_container.sh
+
+# Test container building (comment out for production):
+echo "🐳 Building and pushing RAID test container..."
+./build_container.sh
 
 # Submit training job
 echo "🚀 Submitting training job to Vertex AI..."

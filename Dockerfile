@@ -8,7 +8,7 @@ WORKDIR /app
 ENV PYTHONPATH="/app/act_test:/app:$PYTHONPATH"
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies including gsutil
+# Install system dependencies including gsutil and RAID tools
 RUN apt-get update && apt-get install -y \
     git \
     wget \
@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     apt-transport-https \
     ca-certificates \
+    sudo \
+    mdadm \
     && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee /etc/apt/sources.list.d/google-cloud-sdk.list \
     && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
     && apt-get update && apt-get install -y google-cloud-cli \
@@ -35,12 +37,18 @@ RUN pip install -e .
 # Create directories for data and outputs
 RUN mkdir -p /app/data /app/outputs /app/checkpoints
 
-# Create a data download script
+# Copy scripts
 COPY download_data.sh /app/
-RUN chmod +x /app/download_data.sh
+COPY setup_vertex_raid.sh /app/
+RUN chmod +x /app/download_data.sh /app/setup_vertex_raid.sh
 
 # Create a non-root user with a home directory for security
 RUN groupadd -r appuser && useradd --no-log-init -r -m -g appuser appuser
+
+# Configure sudo for appuser to run RAID commands without password
+RUN echo "appuser ALL=(ALL) NOPASSWD: /sbin/mdadm, /sbin/mkfs.ext4, /bin/mount, /bin/mkdir, /bin/chown, /bin/chmod" >> /etc/sudoers.d/appuser \
+    && chmod 0440 /etc/sudoers.d/appuser
+
 RUN chown -R appuser:appuser /app
 USER appuser
 
