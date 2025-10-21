@@ -12,9 +12,9 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Define the NVMe devices to be used.
-DEVICES="/dev/nvme0n1 /dev/nvme0n2 /dev/nvme0n3 /dev/nvme0n4"
+DEVICES="/dev/nvme1n1 /dev/nvme2n1 /dev/nvme3n1 /dev/nvme4n1 /dev/nvme5n1 /dev/nvme6n1 /dev/nvme7n1 /dev/nvme8n1"
 echo "Creating RAID 0 array /dev/md0 using devices: $DEVICES"
-mdadm --create --verbose /dev/md0 --level=0 --raid-devices=4 $DEVICES
+mdadm --create --verbose /dev/md0 --level=0 --raid-devices=8 $DEVICES
 
 # Allow time for the array to finish initializing.
 echo "Waiting 10 seconds for /dev/md0 to initialize..."

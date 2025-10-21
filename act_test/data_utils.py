@@ -594,18 +594,18 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     train_split_fn = partial(train_split_filter, split_ratio=train_val_split)
     val_split_fn = partial(val_split_filter, split_ratio=train_val_split)
     
-    # Create train dataset
+    # Create train dataset (restore caching behavior)
     train_dataset = (
-        wds.WebDataset(full_pattern, shardshuffle=True)
+        wds.WebDataset(full_pattern, shardshuffle=True, empty_check=False)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(train_split_fn)
         .map(decode_fn)
     )
     
-    # Create val dataset
+    # Create val dataset (restore caching behavior)
     val_dataset = (
-        wds.WebDataset(full_pattern, shardshuffle=True)
+        wds.WebDataset(full_pattern, shardshuffle=True, empty_check=False)
         .decode("pil")
         .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
         .select(val_split_fn)
