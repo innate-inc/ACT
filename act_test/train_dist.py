@@ -34,7 +34,7 @@ def convert_data_always(data_dir):
     """Always convert HDF5 data to WebDataset format (before distributed training)."""
     DATA_DIR = data_dir
     WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
-    SHARD_SIZE = 1000
+    SHARD_SIZE = 20000  # Larger than dataset size to keep one shard
     
     print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
     print("=" * 50)
@@ -77,7 +77,7 @@ def train_ddp(rank, world_size, args, webd_dir):
     NUM_WORKERS = 4
 
     # WebDataset conversion parameters
-    SHARD_SIZE = 1000
+    SHARD_SIZE = 20000  # Larger than dataset size to keep one shard
 
     # Task name and automatic checkpoint directory generation
     TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))
