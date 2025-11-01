@@ -30,31 +30,38 @@ def cleanup():
     """Clean up the distributed environment."""
     dist.destroy_process_group()
 
-def convert_data_always(data_dir):
+def convert_data_always(data_dir, shard_size=500, force_reconvert=True):
     """Always convert HDF5 data to WebDataset format (before distributed training)."""
     DATA_DIR = data_dir
     WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
-    SHARD_SIZE = 1000
     
     print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
     print("=" * 50)
     
-    # Remove existing WebDataset directory if it exists
-    if os.path.exists(WEBD_DIR):
+    # Remove existing WebDataset directory if it exists and force_reconvert is True
+    if os.path.exists(WEBD_DIR) and force_reconvert:
         import shutil
         print(f"🗑️  Removing existing WebDataset directory: {WEBD_DIR}")
         shutil.rmtree(WEBD_DIR)
     
+    # Check if already converted
+    if os.path.exists(WEBD_DIR) and not force_reconvert:
+        print(f"✅ WebDataset directory already exists: {WEBD_DIR}")
+        print("   Skipping conversion (use --force-reconvert to recreate)")
+        return True, WEBD_DIR
+    
     print(f"🔄 Converting HDF5 data to WebDataset format...")
     print(f"📁 HDF5 source: {DATA_DIR}")
     print(f"📁 WebDataset target: {WEBD_DIR}")
-    print(f"📦 Shard size: {SHARD_SIZE}")
+    print(f"📦 Shard size: {shard_size}")
+    print(f"🖼️  Image format: uint8 PyTorch tensors, 224x224")
     
-    # Perform conversion
+    # Perform conversion with optimized settings
     success = convert_hdf5_to_webdataset(
         hdf5_directory=DATA_DIR,
         webd_directory=WEBD_DIR,
-        shard_size=SHARD_SIZE
+        shard_size=shard_size,
+        target_size=(224, 224)  # Resize images to 224x224
     )
     
     if success:
@@ -73,11 +80,15 @@ def train_ddp(rank, world_size, args, webd_dir):
     DATA_DIR = args.data_dir
     CHUNK_SIZE = args.chunk_size
     TRAIN_VAL_SPLIT = 0.9
-    BATCH_SIZE = 96
-    NUM_WORKERS = 4
+    BATCH_SIZE = args.batch_size
+    NUM_WORKERS = args.num_workers
 
     # WebDataset conversion parameters
-    SHARD_SIZE = 1000
+    SHARD_SIZE = args.shard_size
+    
+    # Training optimization parameters
+    USE_BF16 = args.use_bf16  # BF16 mixed precision training
+    USE_COMPILE = args.use_compile  # torch.compile() optimization
 
     # Task name and automatic checkpoint directory generation
     TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))
@@ -89,8 +100,8 @@ def train_ddp(rank, world_size, args, webd_dir):
     WEBD_DIR = webd_dir
 
     # ACT Policy parameters
-    IMAGE_H = 480
-    IMAGE_W = 640
+    IMAGE_H = 224  # Updated from 480 to 224 for faster training
+    IMAGE_W = 224  # Updated from 640 to 224 for faster training
     IMAGE_C = 3
     QPOS_DIM = 6
     ACTION_DIM = 10
@@ -146,6 +157,7 @@ def train_ddp(rank, world_size, args, webd_dir):
             os.environ["WANDB_API_KEY"] = WANDB_API_KEY
         
         wandb.init(project=WANDB_PROJECT, entity=WANDB_ENTITY, name=RUN_NAME, config={
+            # Environment
             "data_dir": DATA_DIR,
             "webd_dir": WEBD_DIR,
             "task_name": TASK_NAME,
@@ -153,14 +165,26 @@ def train_ddp(rank, world_size, args, webd_dir):
             "run_name": RUN_NAME,
             "hostname": socket.gethostname(),
             "checkpoint_dir": CHECKPOINT_DIR,
+            
+            # Data & Batch
             "chunk_size": CHUNK_SIZE,
             "batch_size_per_gpu": BATCH_SIZE,
             "total_effective_batch_size": BATCH_SIZE * world_size,
+            "num_workers": NUM_WORKERS,
+            "shard_size": SHARD_SIZE,
+            
+            # Hardware
             "world_size": world_size,
+            
+            # Optimization
+            "use_bf16": USE_BF16,
+            "use_compile": USE_COMPILE,
             "learning_rate": LEARNING_RATE,
             "weight_decay": WEIGHT_DECAY,
             "lr_backbone": LEARNING_RATE_BACKBONE,
             "max_steps": MAX_STEPS,
+            
+            # Model Architecture
             "dim_model": DIM_MODEL,
             "n_heads": N_HEADS,
             "n_encoder_layers": N_ENCODER_LAYERS,
@@ -169,13 +193,14 @@ def train_ddp(rank, world_size, args, webd_dir):
             "use_vae": USE_VAE,
             "n_obs_steps": N_OBS_STEPS,
             "n_action_steps": N_ACTION_STEPS,
+            
+            # Input/Output Shapes
             "image_h": IMAGE_H,
             "image_w": IMAGE_W,
             "qpos_dim": QPOS_DIM,
             "action_dim": ACTION_DIM,
             "input_shapes": INPUT_SHAPES,
             "output_shapes": OUTPUT_SHAPES,
-            "shard_size": SHARD_SIZE,
         })
 
     # --- 1. Initialize DataLoaders and get dataset_stats ---
@@ -235,6 +260,21 @@ def train_ddp(rank, world_size, args, webd_dir):
     )
 
     policy = ACTPolicy(config=act_config, dataset_stats=dataset_stats).to(device)
+    
+    # Apply torch.compile() if enabled (before DDP wrapping)
+    if USE_COMPILE:
+        if rank == 0:
+            print("⚡ Compiling model with torch.compile()...")
+            print("   Mode: default (with inductor backend)")
+        try:
+            policy = torch.compile(policy, mode='default')
+            if rank == 0:
+                print("   ✓ Model compilation setup completed")
+                print("   Note: First forward/backward pass will trigger actual compilation")
+        except Exception as e:
+            if rank == 0:
+                print(f"   ⚠️  Compilation failed: {e}")
+                print("   Falling back to uncompiled model")
     
     # Wrap model with DDP
     policy = DDP(policy, device_ids=[rank], output_device=rank, find_unused_parameters=False)
@@ -306,11 +346,15 @@ def train_ddp(rank, world_size, args, webd_dir):
                 torch.cuda.synchronize()
             batch_load_time = time.time() - batch_load_start
         
-        # 2. Forward Pass
+        # 2. Forward Pass (with BF16 if enabled)
         if rank == 0:
             forward_start = time.time()
         
-        loss, loss_dict = policy(batch_device)
+        if USE_BF16:
+            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                loss, loss_dict = policy(batch_device)
+        else:
+            loss, loss_dict = policy(batch_device)
         
         if rank == 0:
             if device.type == 'cuda':
@@ -413,9 +457,13 @@ def train_ddp(rank, world_size, args, webd_dir):
                             torch.cuda.synchronize()
                         batch_load_time = time.time() - batch_load_start
                         
-                        # Time forward pass
+                        # Time forward pass (with BF16 if enabled)
                         forward_start = time.time()
-                        loss, loss_dict = policy(batch_device_val)
+                        if USE_BF16:
+                            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                                loss, loss_dict = policy(batch_device_val)
+                        else:
+                            loss, loss_dict = policy(batch_device_val)
                         if device.type == 'cuda':
                             torch.cuda.synchronize()
                         forward_time = time.time() - forward_start
@@ -464,20 +512,45 @@ def train_ddp(rank, world_size, args, webd_dir):
     cleanup()
 
 def main():
-    parser = argparse.ArgumentParser(description='Distributed ACT Training')
+    parser = argparse.ArgumentParser(description='Distributed ACT Training with Optimizations')
+    
+    # Hardware & Distributed
     parser.add_argument('--world_size', type=int, default=None, 
                         help='Number of GPUs to use (default: all available)')
+    
+    # Data
     parser.add_argument('--data_dir', type=str, 
                         default="/home/vignesh/raid/PaperMulti_1_2_Filtered",
                         help='Path to the HDF5 dataset directory')
     parser.add_argument('--chunk_size', type=int, default=30,
                         help='Action sequence length / chunk size')
-    parser.add_argument('--max_steps', type=int, default=15000,
+    parser.add_argument('--batch_size', type=int, default=96,
+                        help='Batch size per GPU (default: 96)')
+    parser.add_argument('--num_workers', type=int, default=4,
+                        help='Number of data loading workers per GPU (default: 4)')
+    parser.add_argument('--shard_size', type=int, default=500,
+                        help='Number of samples per WebDataset shard (default: 500)')
+    parser.add_argument('--force-reconvert', action='store_true',
+                        help='Force reconversion of HDF5 to WebDataset even if already exists')
+    
+    # Training
+    parser.add_argument('--max_steps', type=int, default=120000,
                         help='Maximum number of training steps')
     parser.add_argument('--learning_rate', type=float, default=5e-5,
                         help='Main learning rate')
     parser.add_argument('--learning_rate_backbone', type=float, default=5e-5,
                         help='Learning rate for vision backbone')
+    
+    # Optimizations
+    parser.add_argument('--use-bf16', action='store_true', default=True,
+                        help='Use BF16 mixed precision training (default: True)')
+    parser.add_argument('--no-bf16', dest='use_bf16', action='store_false',
+                        help='Disable BF16 mixed precision training')
+    parser.add_argument('--use-compile', action='store_true', default=True,
+                        help='Use torch.compile() for model optimization (default: True)')
+    parser.add_argument('--no-compile', dest='use_compile', action='store_false',
+                        help='Disable torch.compile() optimization')
+    
     args = parser.parse_args()
     
     # Get number of available GPUs
@@ -491,20 +564,37 @@ def main():
         return
     
     # Always convert data BEFORE starting distributed training
-    conversion_success, webd_dir = convert_data_always(args.data_dir)
+    force_reconvert = getattr(args, 'force_reconvert', False)
+    conversion_success, webd_dir = convert_data_always(
+        args.data_dir, 
+        shard_size=args.shard_size,
+        force_reconvert=force_reconvert
+    )
     
     if not conversion_success:
         print("❌ Failed to convert data. Exiting...")
         return
     
-    print(f"Starting distributed training on {world_size} GPUs")
-    print(f"Using WebDataset directory: {webd_dir}")
-    print(f"Configuration:")
-    print(f"  Data directory: {args.data_dir}")
+    print(f"\n{'='*80}")
+    print(f"STARTING DISTRIBUTED TRAINING")
+    print(f"{'='*80}")
+    print(f"Hardware:")
+    print(f"  GPUs: {world_size}")
+    print(f"  Precision: {'BF16 (mixed)' if args.use_bf16 else 'FP32'}")
+    print(f"  torch.compile: {'Enabled' if args.use_compile else 'Disabled'}")
+    print(f"\nData:")
+    print(f"  Directory: {args.data_dir}")
+    print(f"  WebDataset: {webd_dir}")
+    print(f"  Shard size: {args.shard_size} samples")
+    print(f"  Batch size per GPU: {args.batch_size}")
+    print(f"  Total effective batch: {args.batch_size * world_size}")
+    print(f"  Workers per GPU: {args.num_workers}")
+    print(f"\nTraining:")
     print(f"  Chunk size: {args.chunk_size}")
     print(f"  Max steps: {args.max_steps}")
     print(f"  Learning rate: {args.learning_rate}")
-    print(f"  Learning rate backbone: {args.learning_rate_backbone}")
+    print(f"  LR backbone: {args.learning_rate_backbone}")
+    print(f"{'='*80}\n")
     
     # Spawn processes for distributed training, passing the WebDataset directory
     mp.spawn(train_ddp, args=(world_size, args, webd_dir), nprocs=world_size, join=True)

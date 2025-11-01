@@ -19,13 +19,14 @@ import glob
 from torchvision import transforms
 from functools import partial
 import re
+import io
 
 class EpisodicHDF5DatasetRAM(Dataset):
     # --- Hardcoded Values Based on User Guarantees ---
     ACTION_DIM = 10
     QPOS_DIM = 6
-    IMAGE_H = 480
-    IMAGE_W = 640
+    IMAGE_H = 224  # Updated from 480 to 224
+    IMAGE_W = 224  # Updated from 640 to 224
     IMAGE_C = 3 
 
     H5_ACTION_KEY = 'action'
@@ -310,49 +311,53 @@ class WebDatasetStreaming:
     
     def decode_sample(self, cam1, cam2, qpos, actions):
         """Decode a single sample from WebDataset and convert to ACT policy format."""
-        # Convert images efficiently - no augmentation
-        cam1_array = np.asarray(cam1, dtype=np.float32)
-        cam2_array = np.asarray(cam2, dtype=np.float32)
-        
-        cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
-        cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
+        # Images are now uint8 torch tensors (HWC format: 224x224x3)
+        # Convert to float32, HWC to CHW, and normalize to [0, 1]
+        cam1_tensor = cam1.float().permute(2, 0, 1) * (1.0/255.0)
+        cam2_tensor = cam2.float().permute(2, 0, 1) * (1.0/255.0)
         
         # Handle action chunking and padding
+        # actions is already a PyTorch tensor (float16 from .pth file)
         original_length = len(actions)
         
         if original_length >= self.chunk_size:
             # Take the first chunk_size actions (next actions from current obs)
-            padded_actions = actions[:self.chunk_size].astype(np.float32)
-            is_pad_array = np.zeros(self.chunk_size, dtype=bool)
+            padded_actions = actions[:self.chunk_size].float()
+            is_pad_tensor = torch.zeros(self.chunk_size, dtype=torch.bool)
         else:
             # Pad to chunk_size if we have fewer actions than needed
-            padded_actions = np.zeros((self.chunk_size, actions.shape[1]), dtype=np.float32)
-            padded_actions[:original_length] = actions.astype(np.float32)
-            is_pad_array = np.ones(self.chunk_size, dtype=bool)
-            is_pad_array[:original_length] = False
+            padded_actions = torch.zeros((self.chunk_size, actions.shape[1]), dtype=torch.float32)
+            padded_actions[:original_length] = actions.float()
+            is_pad_tensor = torch.ones(self.chunk_size, dtype=torch.bool)
+            is_pad_tensor[:original_length] = False
         
         # Convert to ACT policy expected format
         sample = {
             'observation.image_camera_1': cam1_tensor,  # (3, H, W)
             'observation.image_camera_2': cam2_tensor,  # (3, H, W)
-            'observation.state': torch.from_numpy(qpos.astype(np.float32)),  # (6,)
-            'action': torch.from_numpy(padded_actions),  # (chunk_size, action_dim)
-            'action_is_pad': torch.from_numpy(is_pad_array)  # (chunk_size,)
+            'observation.state': qpos.float(),  # (6,) - already a tensor
+            'action': padded_actions,  # (chunk_size, action_dim)
+            'action_is_pad': is_pad_tensor  # (chunk_size,)
         }
         
         return sample
     
     def create_webdataset(self):
         """Create the WebDataset pipeline."""
+        # Note: Images are now stored as .pth files (PyTorch tensors)
         dataset = (
             wds.WebDataset(self.dataset_path)
-            .decode("pil")
-            .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
+            .decode("torch")
+            .to_tuple("cam1.pth", "cam2.pth", "qpos.pth", "actions.pth")
             .map(lambda x: self.decode_sample(*x))
         )
         return dataset
 
 # Global picklable functions for WebDataset
+def decode_npy(data):
+    """Picklable function to decode .npy files."""
+    return np.load(io.BytesIO(data))
+
 def train_split_filter(x, split_ratio=0.8):
     """Picklable filter function for training split."""
     return np.random.random() < split_ratio
@@ -371,34 +376,33 @@ class WebDatasetDecoder:
         """Decode a single sample from WebDataset and convert to ACT policy format."""
         cam1, cam2, qpos, actions = sample_tuple
         
-        # Convert images efficiently - no augmentation
-        cam1_array = np.asarray(cam1, dtype=np.float32)
-        cam2_array = np.asarray(cam2, dtype=np.float32)
-        
-        cam1_tensor = torch.from_numpy(cam1_array.transpose(2, 0, 1)) * (1.0/255.0)
-        cam2_tensor = torch.from_numpy(cam2_array.transpose(2, 0, 1)) * (1.0/255.0)
+        # Images are now uint8 torch tensors (HWC format: 224x224x3)
+        # Convert to float32, HWC to CHW, and normalize to [0, 1]
+        cam1_tensor = cam1.float().permute(2, 0, 1) * (1.0/255.0)
+        cam2_tensor = cam2.float().permute(2, 0, 1) * (1.0/255.0)
         
         # Handle action chunking and padding
+        # actions is already a PyTorch tensor (float16 from .pth file)
         original_length = len(actions)
         
         if original_length >= self.chunk_size:
             # Take the first chunk_size actions (next actions from current obs)
-            padded_actions = actions[:self.chunk_size].astype(np.float32)
-            is_pad_array = np.zeros(self.chunk_size, dtype=bool)
+            padded_actions = actions[:self.chunk_size].float()
+            is_pad_tensor = torch.zeros(self.chunk_size, dtype=torch.bool)
         else:
             # Pad to chunk_size if we have fewer actions than needed
-            padded_actions = np.zeros((self.chunk_size, actions.shape[1]), dtype=np.float32)
-            padded_actions[:original_length] = actions.astype(np.float32)
-            is_pad_array = np.ones(self.chunk_size, dtype=bool)
-            is_pad_array[:original_length] = False
+            padded_actions = torch.zeros((self.chunk_size, actions.shape[1]), dtype=torch.float32)
+            padded_actions[:original_length] = actions.float()
+            is_pad_tensor = torch.ones(self.chunk_size, dtype=torch.bool)
+            is_pad_tensor[:original_length] = False
         
         # Convert to ACT policy expected format
         sample = {
             'observation.image_camera_1': cam1_tensor,  # (3, H, W)
             'observation.image_camera_2': cam2_tensor,  # (3, H, W)
-            'observation.state': torch.from_numpy(qpos.astype(np.float32)),  # (6,)
-            'action': torch.from_numpy(padded_actions),  # (chunk_size, action_dim)
-            'action_is_pad': torch.from_numpy(is_pad_array)  # (chunk_size,)
+            'observation.state': qpos.float(),  # (6,) - already a tensor
+            'action': padded_actions,  # (chunk_size, action_dim)
+            'action_is_pad': is_pad_tensor  # (chunk_size,)
         }
         
         return sample
@@ -595,10 +599,12 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     val_split_fn = partial(val_split_filter, split_ratio=train_val_split)
     
     # Create train dataset
+    # Note: Images are now stored as .pth files (PyTorch tensors, uint8)
+    # WebDataset has built-in support for .pth files with decode("torch")
     train_dataset = (
         wds.WebDataset(full_pattern, shardshuffle=True)
-        .decode("pil")
-        .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
+        .decode("torch")
+        .to_tuple("cam1.pth", "cam2.pth", "qpos.pth", "actions.pth")
         .select(train_split_fn)
         .map(decode_fn)
     )
@@ -606,8 +612,8 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     # Create val dataset
     val_dataset = (
         wds.WebDataset(full_pattern, shardshuffle=True)
-        .decode("pil")
-        .to_tuple("cam1.png", "cam2.png", "qpos.npy", "actions.npy")
+        .decode("torch")
+        .to_tuple("cam1.pth", "cam2.pth", "qpos.pth", "actions.pth")
         .select(val_split_fn)
         .map(decode_fn)
     )

@@ -362,6 +362,21 @@ def main():
     print(f"   Total: {total_params:,}")
     print(f"   Trainable: {trainable_params:,}")
     
+    # Compile the model for optimized performance
+    print("\n⚡ Compiling model with torch.compile()...")
+    print("   Mode: default (with inductor backend)")
+    compile_start = time.perf_counter()
+    try:
+        # Use default inductor backend without suppressing errors
+        model = torch.compile(model, mode='default')
+        compile_time = time.perf_counter() - compile_start
+        print(f"   ✓ Compilation setup completed in {compile_time:.2f}s")
+        print("   Note: First forward/backward pass will trigger actual compilation")
+    except Exception as e:
+        print(f"   ⚠️  Compilation failed: {e}")
+        print("   Falling back to uncompiled model")
+        compile_time = 0
+    
     print(f"\n📦 Batch Structure (batch_size={BATCH_SIZE}):")
     print(f"   observation.image_camera_1: [{BATCH_SIZE}, {IMAGE_C}, {IMAGE_H}, {IMAGE_W}]")
     print(f"   observation.image_camera_2: [{BATCH_SIZE}, {IMAGE_C}, {IMAGE_H}, {IMAGE_W}]")
