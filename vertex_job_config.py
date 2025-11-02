@@ -33,8 +33,9 @@ def create_training_job(
         # The container will handle data download and training
         # Pass training arguments after the download script
         args=[
-            "--max_steps", "15000",
+            "--max_steps", "120000",
             "--learning_rate", "5e-5",
+            "--learning_rate_backbone", "5e-5",
             "--chunk_size", "30"
         ],
         # This is where outputs (checkpoints, logs) will be saved
