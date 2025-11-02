@@ -2,6 +2,8 @@
 
 import argparse
 from google.cloud import aiplatform
+from google.cloud.aiplatform_v1.types import custom_job as gca_custom_job_compat
+from google.protobuf.duration_pb2 import Duration
 from typing import Optional
 
 def create_training_job(
@@ -62,10 +64,16 @@ def create_training_job(
         timeout=3600 * 48,  # 48 hours
         # Enable early stopping
         enable_web_access=True,
+        # Flex Start provisioning with 10-minute wait
+        scheduling=gca_custom_job_compat.Scheduling(
+            strategy=gca_custom_job_compat.Scheduling.Strategy.FLEX_START,
+            max_wait_duration=Duration(seconds=600)  # 10 minutes
+        )
     )
     
     print(f"Training job started: {job.resource_name}")
     print(f"Machine: a3-highgpu-4g with 4x H100 80GB GPUs")
+    print(f"Provisioning: Flex Start (will queue up to 10 minutes for resources)")
     print(f"Service Account: train-sa@mauricearm.iam.gserviceaccount.com")
     print(f"Data will be downloaded from: {data_path}")
     print(f"Outputs will be synced to: {output_path}")
