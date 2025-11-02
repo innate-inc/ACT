@@ -41,8 +41,8 @@ def create_training_job(
         # This is where outputs (checkpoints, logs) will be saved
         base_output_dir=output_path,
         # Machine configuration - your powerful specs!
-        machine_type="a2-ultragpu-4g",           # 4x A100 80GB beast!
-        accelerator_type="NVIDIA_A100_80GB",
+        machine_type="a3-highgpu-4g",            # 4x H100 80GB beast!
+        accelerator_type="NVIDIA_H100_80GB",
         accelerator_count=4,
         # Disk configuration
         boot_disk_type="pd-ssd",
@@ -65,7 +65,7 @@ def create_training_job(
     )
     
     print(f"Training job started: {job.resource_name}")
-    print(f"Machine: a2-ultragpu-4g with 4x A100 80GB GPUs")
+    print(f"Machine: a3-highgpu-4g with 4x H100 80GB GPUs")
     print(f"Service Account: train-sa@mauricearm.iam.gserviceaccount.com")
     print(f"Data will be downloaded from: {data_path}")
     print(f"Outputs will be synced to: {output_path}")
@@ -74,7 +74,7 @@ def create_training_job(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--project_id", required=True)
-    parser.add_argument("--region", default="us-east5")
+    parser.add_argument("--region", default="us-central1")
     parser.add_argument("--image_uri", required=True)
     parser.add_argument("--data_path", required=True, help="GCS path to data (e.g., gs://your-bucket/data)")
     parser.add_argument("--output_path", required=True, help="GCS path for outputs (e.g., gs://your-bucket/outputs)")
