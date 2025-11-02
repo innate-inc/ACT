@@ -11,7 +11,7 @@ fi
 PROJECT_ID="mauricearm"
 REGION="us-central1"
 IMAGE_NAME="act-training"
-TAG="latest"
+TAG="h100"
 
 # Get arguments
 DATA_GCS_PATH="$1"
@@ -45,7 +45,7 @@ echo "🐳 Building and pushing container..."
 
 # Submit training job
 echo "🚀 Submitting training job to Vertex AI..."
-python vertex_job_config.py \
+python3 vertex_job_config.py \
     --project_id ${PROJECT_ID} \
     --region ${REGION} \
     --image_uri "gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${TAG}" \
