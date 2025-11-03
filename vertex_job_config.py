@@ -30,6 +30,17 @@ def create_training_job(
         staging_bucket=output_path,
     )
     
+    # Create Duration object for max_wait_duration (1200 seconds = 10 minutes)
+    # This is how long the job will wait for resources to become available
+    max_wait_duration_proto = Duration()
+    max_wait_duration_proto.FromSeconds(1200)
+    
+    # Create Scheduling object with FLEX_START strategy and max_wait_duration
+    scheduling = gca_custom_job_compat.Scheduling(
+        strategy=gca_custom_job_compat.Scheduling.Strategy.FLEX_START,
+        max_wait_duration=max_wait_duration_proto
+    )
+    
     # Run the training job
     job.run(
         # The container will handle data download and training
@@ -60,18 +71,20 @@ def create_training_job(
         service_account="train-sa@mauricearm.iam.gserviceaccount.com",
         # Restart policy
         restart_job_on_worker_restart=True,
-        # Longer timeout for data download + training
-        timeout=3600 * 48,  # 48 hours
+        # Maximum runtime duration for the job itself (48 hours)
+        # This is separate from max_wait_duration
+        timeout=3600 * 12,  # 48 hours
         # Enable early stopping
         enable_web_access=True,
-        # Flex Start provisioning with 10-minute wait
-        scheduling_strategy=gca_custom_job_compat.Scheduling.Strategy.FLEX_START,
-        max_wait_duration=1200  # 10 minutes (in seconds)
+        # Flex Start provisioning with scheduling configuration
+        # This includes max_wait_duration (10 minutes wait for resources)
+        scheduling=scheduling
     )
     
     print(f"Training job started: {job.resource_name}")
     print(f"Machine: a3-highgpu-4g with 4x H100 80GB GPUs")
     print(f"Provisioning: Flex Start (will queue up to 10 minutes for resources)")
+    print(f"Maximum runtime: 48 hours")
     print(f"Service Account: train-sa@mauricearm.iam.gserviceaccount.com")
     print(f"Data will be downloaded from: {data_path}")
     print(f"Outputs will be synced to: {output_path}")
