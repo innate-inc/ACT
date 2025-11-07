@@ -3,7 +3,6 @@
 import argparse
 from google.cloud import aiplatform
 from google.cloud.aiplatform_v1.types import custom_job as gca_custom_job_compat
-from google.protobuf.duration_pb2 import Duration
 from typing import Optional
 
 def create_training_job(
@@ -28,17 +27,6 @@ def create_training_job(
         display_name=job_name or "act-distributed-training",
         container_uri=image_uri,
         staging_bucket=output_path,
-    )
-    
-    # Create Duration object for max_wait_duration (1200 seconds = 10 minutes)
-    # This is how long the job will wait for resources to become available
-    max_wait_duration_proto = Duration()
-    max_wait_duration_proto.FromSeconds(1200)
-    
-    # Create Scheduling object with FLEX_START strategy and max_wait_duration
-    scheduling = gca_custom_job_compat.Scheduling(
-        strategy=gca_custom_job_compat.Scheduling.Strategy.FLEX_START,
-        max_wait_duration=max_wait_duration_proto
     )
     
     # Run the training job
@@ -76,9 +64,9 @@ def create_training_job(
         timeout=3600 * 12,  # 48 hours
         # Enable early stopping
         enable_web_access=True,
-        # Flex Start provisioning with scheduling configuration
-        # This includes max_wait_duration (10 minutes wait for resources)
-        scheduling=scheduling
+        # Flex Start provisioning with 10 minute wait for resources
+        scheduling_strategy=gca_custom_job_compat.Scheduling.Strategy.FLEX_START,
+        max_wait_duration=1200
     )
     
     print(f"Training job started: {job.resource_name}")
