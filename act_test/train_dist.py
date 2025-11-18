@@ -532,6 +532,92 @@ def train_ddp(rank, world_size, args, webd_dir):
     if rank == 0:
         overall_pbar.close()
         print("Training finished.")
+        
+        # Export to ONNX (only on rank 0)
+        print("Exporting model to ONNX format...")
+        try:
+            # Create a wrapper for inference-only export (no loss computation)
+            class ACTPolicyInferenceWrapper(torch.nn.Module):
+                def __init__(self, policy):
+                    super().__init__()
+                    self.policy = policy
+                
+                def forward(self, img_cam1, img_cam2, robot_state):
+                    """Forward pass for inference - returns predicted actions only."""
+                    batch = {
+                        "observation.image_camera_1": img_cam1,
+                        "observation.image_camera_2": img_cam2,
+                        "observation.state": robot_state,
+                    }
+                    # Normalize inputs
+                    batch = self.policy.normalize_inputs(batch)
+                    # Prepare batch for model (adds latent if VAE is used)
+                    model_batch = self.policy._prepare_batch_for_model(batch)
+                    # Get predicted actions from model (returns actions and VAE params)
+                    actions_normalized, _ = self.policy.model(model_batch)
+                    # Unnormalize actions to get real-world values
+                    actions = self.policy.unnormalize_outputs({"action": actions_normalized})["action"]
+                    return actions
+            
+            # Create a fresh uncompiled model for ONNX export
+            # (torch.compile models cannot be exported to ONNX)
+            print("  Creating fresh model without torch.compile()...")
+            onnx_policy = ACTPolicy(config=act_config, dataset_stats=dataset_stats).to(device)
+            
+            # Load the trained weights from the DDP-wrapped compiled model
+            # If torch.compile was used, strip the "_orig_mod." prefix from state dict keys
+            state_dict = policy.module.state_dict()
+            if USE_COMPILE:
+                # Remove "_orig_mod." prefix added by torch.compile
+                state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+            
+            onnx_policy.load_state_dict(state_dict)
+            onnx_policy.eval()
+            
+            # Wrap for inference
+            inference_wrapper = ACTPolicyInferenceWrapper(onnx_policy).to(device)
+            inference_wrapper.eval()
+            
+            # Create dummy inputs (just observations, no actions needed for inference)
+            dummy_img_cam1 = torch.randn(1, IMAGE_C, IMAGE_H, IMAGE_W, device=device)
+            dummy_img_cam2 = torch.randn(1, IMAGE_C, IMAGE_H, IMAGE_W, device=device)
+            dummy_robot_state = torch.randn(1, QPOS_DIM, device=device)
+            
+            # Define ONNX export path
+            onnx_path = os.path.join(CHECKPOINT_DIR, "act_policy_final.onnx")
+            
+            print(f"  Exporting to {onnx_path}...")
+            # Export to ONNX for inference
+            torch.onnx.export(
+                inference_wrapper,
+                (dummy_img_cam1, dummy_img_cam2, dummy_robot_state),
+                onnx_path,
+                export_params=True,
+                opset_version=14,
+                do_constant_folding=True,
+                input_names=['image_camera_1', 'image_camera_2', 'robot_state'],
+                output_names=['predicted_actions'],
+                dynamic_axes={
+                    'image_camera_1': {0: 'batch_size'},
+                    'image_camera_2': {0: 'batch_size'},
+                    'robot_state': {0: 'batch_size'},
+                    'predicted_actions': {0: 'batch_size'}
+                }
+            )
+            
+            print(f"✅ ONNX model saved to: {onnx_path}")
+            print(f"   Model inputs: image_camera_1, image_camera_2, robot_state")
+            print(f"   Model output: predicted_actions (shape: [batch, {CHUNK_SIZE}, {ACTION_DIM}])")
+            wandb.save(onnx_path)
+            
+            # Clean up the temporary models
+            del onnx_policy, inference_wrapper
+            
+        except Exception as e:
+            print(f"❌ Failed to export ONNX model: {e}")
+            import traceback
+            traceback.print_exc()
+        
         wandb.finish()
     
     cleanup()
