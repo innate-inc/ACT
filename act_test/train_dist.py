@@ -10,6 +10,7 @@ from datetime import datetime
 import socket
 import time
 import argparse
+import math
 
 from ACT import ACTConfig, ACTPolicy
 from data_utils import initialize_webdataset_data
@@ -130,6 +131,9 @@ def train_ddp(rank, world_size, args, webd_dir):
     LEARNING_RATE = args.learning_rate
     WEIGHT_DECAY = 5e-4
     LEARNING_RATE_BACKBONE = args.learning_rate_backbone
+    # Default warmup to 5% of total steps if not specified
+    WARMUP_STEPS = args.warmup_steps if args.warmup_steps is not None else int(0.05 * MAX_STEPS)
+    MIN_LR_RATIO = 0.1  # Decay to 1/10th of original LR
     
     # Calculate checkpoint interval for exactly 10 checkpoints
     CHECKPOINT_INTERVAL = MAX_STEPS // 10
@@ -183,6 +187,8 @@ def train_ddp(rank, world_size, args, webd_dir):
             "weight_decay": WEIGHT_DECAY,
             "lr_backbone": LEARNING_RATE_BACKBONE,
             "max_steps": MAX_STEPS,
+            "warmup_steps": WARMUP_STEPS,
+            "min_lr_ratio": MIN_LR_RATIO,
             
             # Model Architecture
             "dim_model": DIM_MODEL,
@@ -280,6 +286,22 @@ def train_ddp(rank, world_size, args, webd_dir):
     policy = DDP(policy, device_ids=[rank], output_device=rank, find_unused_parameters=False)
     
     optimizer = optim.AdamW(policy.module.get_optim_params(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    
+    # Create learning rate scheduler: Linear warmup + Cosine annealing to min_lr
+    def lr_lambda(current_step):
+        if current_step < WARMUP_STEPS:
+            # Linear warmup from 0 to 1
+            return float(current_step) / float(max(1, WARMUP_STEPS))
+        else:
+            # Cosine annealing from 1.0 to MIN_LR_RATIO after warmup
+            progress = float(current_step - WARMUP_STEPS) / float(max(1, MAX_STEPS - WARMUP_STEPS))
+            cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return MIN_LR_RATIO + (1.0 - MIN_LR_RATIO) * cosine_decay
+    
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    
+    if rank == 0:
+        print(f"Learning rate scheduler: Linear warmup ({WARMUP_STEPS} steps, {WARMUP_STEPS/MAX_STEPS*100:.1f}%) + Cosine annealing to {MIN_LR_RATIO*100:.0f}% of max LR")
 
     # Only watch model on rank 0
     if rank == 0:
@@ -378,6 +400,7 @@ def train_ddp(rank, world_size, args, webd_dir):
             optimizer_start = time.time()
         
         optimizer.step()
+        scheduler.step()  # Update learning rate
         
         if rank == 0:
             if device.type == 'cuda':
@@ -398,6 +421,8 @@ def train_ddp(rank, world_size, args, webd_dir):
                 "train/total_loss": loss.item(),
                 "train/l1_loss": loss_dict.get("l1_loss", 0),
                 "train/kld_loss": loss_dict.get("kld_loss", 0),
+                "train/learning_rate": optimizer.param_groups[0]['lr'],
+                "train/lr_backbone": optimizer.param_groups[1]['lr'] if len(optimizer.param_groups) > 1 else optimizer.param_groups[0]['lr'],
                 "timing/batch_load_ms": batch_load_time * 1000,
                 "timing/forward_ms": forward_time * 1000,
                 "timing/backward_ms": backward_time * 1000,
@@ -540,6 +565,8 @@ def main():
                         help='Main learning rate')
     parser.add_argument('--learning_rate_backbone', type=float, default=5e-5,
                         help='Learning rate for vision backbone')
+    parser.add_argument('--warmup_steps', type=int, default=None,
+                        help='Number of warmup steps for learning rate scheduler (default: 5%% of max_steps)')
     
     # Optimizations
     parser.add_argument('--use-bf16', action='store_true', default=True,
@@ -594,6 +621,9 @@ def main():
     print(f"  Max steps: {args.max_steps}")
     print(f"  Learning rate: {args.learning_rate}")
     print(f"  LR backbone: {args.learning_rate_backbone}")
+    warmup_display = args.warmup_steps if args.warmup_steps is not None else f"{int(0.05 * args.max_steps)} (5% of steps)"
+    print(f"  Warmup steps: {warmup_display}")
+    print(f"  LR schedule: Linear warmup (5%) + Cosine decay to 10% of max LR")
     print(f"{'='*80}\n")
     
     # Spawn processes for distributed training, passing the WebDataset directory
