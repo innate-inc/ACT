@@ -1,0 +1,104 @@
+# =============================================================================
+# ACT Training SSH Pod - Interactive Development
+# =============================================================================
+# SSH-enabled pod for interactive development and debugging
+#
+# Usage:
+#   kubectl apply -f act-training-ssh.yaml
+#   kubectl port-forward pod/act-ssh 2222:22
+#   ssh -p 2222 root@localhost
+#
+# This pod includes:
+#   - 8x H100 GPUs
+#   - SSH access for development
+#   - Pre-installed dependencies
+#   - /data volume for fast storage
+# =============================================================================
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: act-ssh
+  labels:
+    app: act-training
+spec:
+  containers:
+  - name: cuda
+    # Replace with your Docker Hub image
+    image: yourusername/act-training:latest
+    imagePullPolicy: Always
+    
+    command:
+    - /bin/bash
+    - -c
+    - |
+      # Install SSH server
+      apt-get update && apt-get install -y openssh-server
+      
+      # Configure SSH for passwordless root login
+      passwd -d root
+      echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
+      echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
+      echo 'PermitEmptyPasswords yes' >> /etc/ssh/sshd_config
+      
+      mkdir -p /var/run/sshd
+      
+      # Print connection info
+      echo "========================================"
+      echo "SSH Pod Ready!"
+      echo "========================================"
+      echo ""
+      echo "To connect:"
+      echo "  1. kubectl port-forward pod/act-ssh 2222:22"
+      echo "  2. ssh -p 2222 root@localhost"
+      echo ""
+      echo "GPU Info:"
+      nvidia-smi --query-gpu=name,memory.total --format=csv
+      echo ""
+      echo "========================================"
+      
+      # Start SSH daemon
+      /usr/sbin/sshd -D
+    
+    ports:
+    - containerPort: 22
+      name: ssh
+    - containerPort: 29500
+      name: dist-port
+    
+    env:
+    - name: PYTHONUNBUFFERED
+      value: "1"
+    - name: DATA_GCS_PATH
+      value: "gs://maurice-prod-data/data/socks1wed_socks2wed_filt_merged"
+    - name: OUTPUT_GCS_PATH
+      value: "gs://maurice-prod-data/ckpts"
+    
+    resources:
+      requests:
+        nvidia.com/gpu: 8
+        nvidia.com/hostdev: 8
+        memory: "512Gi"
+        cpu: "32"
+      limits:
+        nvidia.com/gpu: 8
+        nvidia.com/hostdev: 8
+        memory: "512Gi"
+        cpu: "32"
+    
+    volumeMounts:
+    - name: data-volume
+      mountPath: /data
+    - name: shm
+      mountPath: /dev/shm
+  
+  volumes:
+  - name: data-volume
+    emptyDir: {}
+  - name: shm
+    emptyDir:
+      medium: Memory
+      sizeLimit: "64Gi"
+  
+  restartPolicy: Never
+

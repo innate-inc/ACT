@@ -1,0 +1,174 @@
+# =============================================================================
+# k8s-act-training.yaml
+# =============================================================================
+# Kubernetes Job for ACT distributed training on SFCompute
+#
+# Usage:
+#   1. Update the environment variables below (GCS paths, etc.)
+#   2. Apply: kubectl apply -f k8s-act-training.yaml
+#   3. Watch: kubectl get pods -w
+#   4. Logs: kubectl logs -f act-training-0
+# =============================================================================
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: act-training
+spec:
+  completions: 1
+  parallelism: 1
+  completionMode: Indexed
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        job-name: act-training
+    spec:
+      containers:
+      - name: trainer
+        # Use your Docker Hub image
+        image: heemyk/act-training:latest
+        imagePullPolicy: Always
+        
+        # Training command
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "🚀 ACT Training Job Starting"
+          echo "============================"
+          
+          # Configuration
+          DATA_GCS_PATH="${DATA_GCS_PATH:-gs://maurice-prod-data/PaperMulti_1_2_Filtered}"
+          OUTPUT_GCS_PATH="${OUTPUT_GCS_PATH:-gs://maurice-prod-data/ckpts}"
+          LOCAL_DATA_DIR="/data/dataset"
+          
+          echo "📊 Configuration:"
+          echo "   Data GCS:    $DATA_GCS_PATH"
+          echo "   Output GCS:  $OUTPUT_GCS_PATH"
+          echo "   Local dir:   $LOCAL_DATA_DIR"
+          echo ""
+          
+          # Check GPU availability
+          echo "🎮 GPU Check:"
+          nvidia-smi --query-gpu=index,name,memory.total --format=csv
+          GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+          echo "   Found $GPU_COUNT GPUs"
+          echo ""
+          
+          # Authenticate with GCS using service account if provided
+          if [ -f "/secrets/gcs-key.json" ]; then
+            echo "🔐 Authenticating with GCS service account..."
+            gcloud auth activate-service-account --key-file=/secrets/gcs-key.json
+          else
+            echo "⚠️  No GCS service account key found at /secrets/gcs-key.json"
+            echo "   Attempting to use default credentials..."
+          fi
+          
+          # Create data directory
+          mkdir -p $LOCAL_DATA_DIR
+          
+          # Download data from GCS
+          echo ""
+          echo "📥 Downloading data from GCS..."
+          gcloud storage cp -r "$DATA_GCS_PATH/*" "$LOCAL_DATA_DIR/" || {
+            echo "❌ Failed to download data. Check GCS authentication."
+            exit 1
+          }
+          
+          echo "✅ Data downloaded successfully"
+          echo "   Size: $(du -sh $LOCAL_DATA_DIR | cut -f1)"
+          ls -la $LOCAL_DATA_DIR/
+          
+          # Run distributed training
+          echo ""
+          echo "🏋️ Starting distributed training..."
+          cd /app
+          
+          python3 -m act_test.train_dist \
+            --data_dir "$LOCAL_DATA_DIR" \
+            --chunk_size ${CHUNK_SIZE:-30} \
+            --max_steps ${MAX_STEPS:-120000} \
+            --learning_rate ${LEARNING_RATE:-5e-5} \
+            --learning_rate_backbone ${LEARNING_RATE:-5e-5} \
+            --batch_size ${BATCH_SIZE:-96} \
+            --world_size $GPU_COUNT
+          
+          TRAIN_EXIT=$?
+          
+          # Upload checkpoints to GCS
+          echo ""
+          echo "📤 Uploading checkpoints..."
+          CKPT_DIR=$(find $LOCAL_DATA_DIR/checkpoints -maxdepth 1 -type d -name "*_ddp" | head -1)
+          
+          if [ -n "$CKPT_DIR" ] && [ -d "$CKPT_DIR" ]; then
+            gcloud storage cp -r "$CKPT_DIR" "$OUTPUT_GCS_PATH/"
+            echo "✅ Checkpoints uploaded to: $OUTPUT_GCS_PATH/$(basename $CKPT_DIR)"
+          else
+            echo "⚠️  No checkpoint directory found"
+          fi
+          
+          echo ""
+          if [ $TRAIN_EXIT -eq 0 ]; then
+            echo "🎉 Training completed successfully!"
+          else
+            echo "❌ Training failed with exit code: $TRAIN_EXIT"
+          fi
+          
+          exit $TRAIN_EXIT
+
+        # Environment variables
+        env:
+        - name: DATA_GCS_PATH
+          value: "gs://maurice-prod-data/PaperMulti_1_2_Filtered"
+        - name: OUTPUT_GCS_PATH
+          value: "gs://maurice-prod-data/ckpts"
+        - name: CHUNK_SIZE
+          value: "30"
+        - name: MAX_STEPS
+          value: "120000"
+        - name: LEARNING_RATE
+          value: "5e-5"
+        - name: BATCH_SIZE
+          value: "96"
+        - name: WANDB_MODE
+          value: "online"
+        - name: WANDB_API_KEY
+          value: "f25e8c35a0cd601c2cafcdbfd698ce8cfba25a9c"
+        - name: NCCL_DEBUG
+          value: "INFO"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+
+        # Resource requests for 8 H100 GPUs
+        resources:
+          requests:
+            nvidia.com/gpu: 8
+            nvidia.com/hostdev: 8
+            memory: "512Gi"
+            cpu: "32"
+          limits:
+            nvidia.com/gpu: 8
+            nvidia.com/hostdev: 8
+            memory: "512Gi"
+            cpu: "32"
+
+        # Mount data volume for fast storage
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+        - name: gcs-credentials
+          mountPath: /secrets
+          readOnly: true
+
+      # Volumes
+      volumes:
+      - name: data-volume
+        emptyDir: {}
+      - name: gcs-credentials
+        secret:
+          secretName: gcs-key
+
+      restartPolicy: Never
+

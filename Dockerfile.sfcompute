@@ -1,18 +1,22 @@
 # =============================================================================
 # Dockerfile.sfcompute
 # =============================================================================
-# Docker image for ACT training on SFCompute H100 nodes
+# Docker image for ACT training on SFCompute Kubernetes (H100 nodes)
 # 
 # This Dockerfile is optimized for:
-#   - SFCompute H100 GPU nodes
-#   - NVMe storage at /data (mounted from host)
-#   - Data downloaded from GCS bucket
+#   - SFCompute Kubernetes with H100 GPUs
+#   - InfiniBand RDMA for multi-node training
+#   - GCS bucket data access
 #
-# Build:
-#   docker build -t yourusername/act-training:sfcompute -f Dockerfile.sfcompute .
+# Build (on Linux/amd64):
+#   docker build -t yourusername/act-training:latest -f Dockerfile.sfcompute .
+#   docker push yourusername/act-training:latest
 #
-# Run on SFCompute:
-#   docker run --gpus all -v /data:/data yourusername/act-training:sfcompute
+# Build (on ARM Mac - cross-compile):
+#   docker buildx build --platform linux/amd64 -t yourusername/act-training:latest -f Dockerfile.sfcompute --push .
+#
+# Deploy to SFCompute K8s:
+#   kubectl apply -f k8s/act-training-job.yaml
 # =============================================================================
 
 # Use NVIDIA's PyTorch base image with CUDA support
@@ -23,13 +27,12 @@ FROM nvcr.io/nvidia/pytorch:24.03-py3
 WORKDIR /app
 
 # Set environment variables
-ENV PYTHONPATH="/app/act_test:/app:$PYTHONPATH"
+ENV PYTHONPATH="/app/act_test:/app:${PYTHONPATH:-}"
 ENV PYTHONUNBUFFERED=1
 ENV WANDB_MODE="online"
 ENV NCCL_DEBUG="INFO"
 
-# Install system dependencies
-# Note: We include google-cloud-cli for GCS access (to download data from your bucket)
+# Install system dependencies including SSH server (for K8s SSH pods)
 RUN apt-get update && apt-get install -y \
     git \
     wget \
@@ -41,7 +44,18 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     apt-transport-https \
     ca-certificates \
+    openssh-server \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
+
+# Install libibverbs for InfiniBand RDMA support
+# Required by SFCompute for full-speed multi-node communication
+RUN wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && \
+    dpkg -i cuda-keyring_1.1-1_all.deb && \
+    rm cuda-keyring_1.1-1_all.deb && \
+    apt-get update && \
+    apt-get install -y libibverbs-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install Google Cloud CLI for GCS data access
 # This allows downloading training data from your GCS bucket
@@ -53,11 +67,10 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dea
 # Copy requirements and install Python dependencies
 COPY requirements.txt ./
 
-# Install Python packages (excluding google-cloud-aiplatform since we're not using Vertex)
-RUN pip install --no-cache-dir \
-    torch==2.6.0 \
-    torchaudio==2.6.0 \
-    torchvision==0.21.0 \
+# Install Python packages
+# NOTE: Base image already includes PyTorch 2.3.x, TensorRT, CUDA, cuDNN - no need to reinstall!
+# Using --prefer-binary to use pre-built wheels instead of compiling from source
+RUN pip install --no-cache-dir --prefer-binary \
     numpy==1.26.4 \
     einops==0.8.1 \
     opencv-python-headless==4.7.0.72 \
@@ -66,7 +79,6 @@ RUN pip install --no-cache-dir \
     timm==1.0.15 \
     safetensors==0.5.3 \
     onnx \
-    tensorrt \
     h5py==3.13.0 \
     webdataset==0.2.111 \
     PyYAML==6.0.2 \
