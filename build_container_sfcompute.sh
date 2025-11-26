@@ -2,10 +2,9 @@
 set -e
 
 # =============================================================================
-# Build and Push Container for SFCompute
+# Build and Push Container for SFCompute (Docker Hub)
 # =============================================================================
 # This script builds the Docker container and pushes to Docker Hub
-# (or any other container registry you prefer)
 #
 # Usage:
 #   ./build_container_sfcompute.sh [DOCKER_USERNAME] [IMAGE_TAG]
@@ -16,8 +15,8 @@ set -e
 #   ./build_container_sfcompute.sh myusername v1.0    # Custom username and tag
 # =============================================================================
 
-# Configuration - CHANGE THESE TO YOUR DOCKER HUB CREDENTIALS
-DOCKER_USERNAME="${1:-yourusername}"  # Replace with your Docker Hub username
+# Configuration
+DOCKER_USERNAME="${1:-heemyk}"
 IMAGE_NAME="act-training"
 TAG="${2:-latest}"
 
@@ -44,10 +43,10 @@ fi
 
 # Build the image using the sfcompute Dockerfile
 echo ""
-echo "🔨 Building image..."
-docker build -t ${IMAGE_URI} -f Dockerfile.sfcompute .
+echo "🔨 Building image (no cache - fresh build)..."
+docker build --no-cache -t ${IMAGE_URI} -f Dockerfile.sfcompute .
 
-# Tag with additional tags if needed
+# Tag with additional tags
 docker tag ${IMAGE_URI} ${DOCKER_USERNAME}/${IMAGE_NAME}:h100
 docker tag ${IMAGE_URI} ${DOCKER_USERNAME}/${IMAGE_NAME}:sfcompute
 
@@ -66,8 +65,10 @@ echo "  - ${IMAGE_URI}"
 echo "  - ${DOCKER_USERNAME}/${IMAGE_NAME}:h100"
 echo "  - ${DOCKER_USERNAME}/${IMAGE_NAME}:sfcompute"
 echo ""
-echo "📝 To use this image on SFCompute:"
+echo "📝 To use this image on SFCompute K8s:"
+echo "   kubectl apply -f k8s-act-training.yaml"
+echo ""
+echo "📝 To use this image on SFCompute (direct SSH):"
 echo "   1. SSH into your node: sf nodes ssh root@<node-name>"
 echo "   2. Pull the image: docker pull ${IMAGE_URI}"
 echo "   3. Run with GPU: docker run --gpus all -v /data:/data ${IMAGE_URI}"
-

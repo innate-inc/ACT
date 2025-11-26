@@ -12,8 +12,8 @@ IMAGE_URI="gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${TAG}"
 
 echo "🐳 Building Docker image: ${IMAGE_URI}"
 
-# Build the image
-docker build -t ${IMAGE_URI} .
+# Build the image (no cache - fresh build)
+docker build --no-cache -t ${IMAGE_URI} .
 
 # Configure Docker for GCR
 gcloud auth configure-docker
