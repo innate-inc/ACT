@@ -11,3 +11,4 @@ build/
 act_test.egg-info/
 
 venv/
+gcs-key.json
