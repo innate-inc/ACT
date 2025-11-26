@@ -95,7 +95,8 @@ COPY act_test/ ./act_test/
 COPY setup.py ./
 
 # Install the package in development mode
-RUN pip install -e .
+# Use --no-deps since all dependencies are already installed above
+RUN pip install --no-deps -e .
 
 # Copy scripts
 COPY download_data_sfcompute.sh /app/

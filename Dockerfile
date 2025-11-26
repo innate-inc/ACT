@@ -22,15 +22,15 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the package
-COPY act_test/ ./act_test/
+# Use docker-specific requirements (excludes packages already in base image)
+COPY requirements.docker.txt ./
 COPY setup.py ./
+COPY act_test/ ./act_test/
 
-# Install the package in development mode
-RUN pip install -e .
+# Install all dependencies in a single layer to minimize image size
+RUN pip install --no-cache-dir -r requirements.docker.txt && \
+    pip install --no-cache-dir -e . && \
+    rm -rf ~/.cache/pip
 
 # Create directories for data and outputs
 RUN mkdir -p /app/data /app/outputs /app/checkpoints

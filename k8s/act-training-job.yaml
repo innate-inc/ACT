@@ -29,8 +29,8 @@ spec:
     spec:
       containers:
       - name: trainer
-        # Replace with your Docker Hub image
-        image: yourusername/act-training:latest
+        # Docker Hub image
+        image: heemyk/act-training:latest
         imagePullPolicy: Always
         
         # Training command

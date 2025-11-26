@@ -9,3 +9,5 @@ wandb/
 dist/
 build/
 act_test.egg-info/
+
+venv/
