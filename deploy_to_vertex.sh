@@ -36,12 +36,14 @@ echo ""
 # Validate that buckets exist
 echo "🔍 Validating GCS paths..."
 if ! gsutil ls "${DATA_GCS_PATH}" > /dev/null 2>&1; then
-    echo "❌ Error: Data bucket ${DATA_GCS_PATH} does not exist or is not accessible"
+    echo "❌ Error: Data path ${DATA_GCS_PATH} does not exist or is not accessible"
     exit 1
 fi
 
-if ! gsutil ls "${OUTPUT_GCS_PATH}" > /dev/null 2>&1; then
-    echo "❌ Error: Output bucket ${OUTPUT_GCS_PATH} does not exist or is not accessible"
+# For output path, only check that the bucket exists (GCS will create folders automatically)
+OUTPUT_BUCKET=$(echo "${OUTPUT_GCS_PATH}" | sed 's|gs://\([^/]*\).*|gs://\1|')
+if ! gsutil ls "${OUTPUT_BUCKET}" > /dev/null 2>&1; then
+    echo "❌ Error: Output bucket ${OUTPUT_BUCKET} does not exist or is not accessible"
     exit 1
 fi
 
