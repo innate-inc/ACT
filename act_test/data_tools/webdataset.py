@@ -115,17 +115,17 @@ def convert_hdf5_to_webdataset(hdf5_directory, webd_directory, shard_size=1000):
     Convert HDF5 episode files to WebDataset format.
     
     Args:
-        hdf5_directory (str): Directory containing HDF5 episode files and metadata.json
+        hdf5_directory (str): Directory containing HDF5 episode files and dataset_metadata.json
         webd_directory (str): Output directory for WebDataset shards
         shard_size (int): Number of samples per shard (default: 1000)
     
     Returns:
         bool: True if conversion successful, False otherwise
     """
-    metadata_file = os.path.join(hdf5_directory, "metadata.json")
+    metadata_file = os.path.join(hdf5_directory, "dataset_metadata.json")
     
     if not os.path.exists(metadata_file):
-        print(f"❌ Error: metadata.json not found in {hdf5_directory}")
+        print(f"❌ Error: dataset_metadata.json not found in {hdf5_directory}")
         return False
     
     # Create output directory
