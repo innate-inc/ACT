@@ -91,10 +91,20 @@ def train_ddp(rank, world_size, args, webd_dir):
     USE_BF16 = args.use_bf16  # BF16 mixed precision training
     USE_COMPILE = args.use_compile  # torch.compile() optimization
 
-    # Task name and automatic checkpoint directory generation
-    TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))
-    TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
-    RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}_ddp"
+    # Task name and checkpoint directory generation
+    # Check if RUN_NAME is provided as environment variable
+    RUN_NAME = os.getenv("RUN_NAME")
+    if not RUN_NAME:
+        # Fallback to auto-generated name if not provided
+        TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))
+        TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+        RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}_ddp"
+        if rank == 0:
+            print(f"⚠️  No RUN_NAME provided, using auto-generated: {RUN_NAME}")
+    else:
+        if rank == 0:
+            print(f"✅ Using provided RUN_NAME: {RUN_NAME}")
+    
     CHECKPOINT_DIR = os.path.join(DATA_DIR, "checkpoints", RUN_NAME)
 
     # Use the WebDataset directory passed from main
@@ -152,9 +162,16 @@ def train_ddp(rank, world_size, args, webd_dir):
         print(f"Using device: {device}")
         print(f"Using WebDataset directory: {WEBD_DIR}")
         
+        # Check if checkpoint directory already exists
+        if os.path.exists(CHECKPOINT_DIR):
+            error_msg = f"❌ ERROR: Checkpoint directory already exists: {CHECKPOINT_DIR}"
+            print(error_msg)
+            print("   This run name is already in use. Please choose a different name.")
+            raise RuntimeError(error_msg)
+        
         # Create checkpoint directory
-        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-        print(f"Checkpoint directory: {CHECKPOINT_DIR}")
+        os.makedirs(CHECKPOINT_DIR, exist_ok=False)
+        print(f"✅ Created checkpoint directory: {CHECKPOINT_DIR}")
 
         # Initialize W&B only on rank 0
         if not os.getenv("WANDB_API_KEY"):

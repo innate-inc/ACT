@@ -194,7 +194,7 @@ def initialize_data(
             - val_dataloader: DataLoader for the validation set.
             - dataset_stats: Normalization statistics computed from the training set.
     """
-    metadata_path = os.path.join(data_dir, "metadata.json")
+    metadata_path = os.path.join(data_dir, "dataset_metadata.json")
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f"metadata.json not found in {data_dir}")
 
