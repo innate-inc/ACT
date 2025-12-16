@@ -4,7 +4,7 @@ set -e
 # Set your project details
 PROJECT_ID="mauricearm"
 IMAGE_NAME="act-training"
-TAG="h100"
+TAG="h100-latest"
 REGION="us-central1"
 
 # Use Google Container Registry (simpler - no repository creation needed)

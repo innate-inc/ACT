@@ -17,7 +17,7 @@ fi
 PROJECT_ID="mauricearm"
 REGION="us-central1"
 IMAGE_NAME="act-training"
-TAG="h100"
+TAG="h100-latest"
 
 # Get arguments
 DATA_GCS_PATH="$1"

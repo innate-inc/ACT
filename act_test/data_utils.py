@@ -181,7 +181,7 @@ def initialize_data(
     Initializes training and validation DataLoaders from HDF5 episodes listed in metadata.json.
 
     Args:
-        data_dir: Directory containing 'metadata.json' and HDF5 episode files.
+        data_dir: Directory containing 'dataset_metadata.json' and HDF5 episode files.
         chunk_size: The chunk size for loading sequences from episodes.
         train_val_split: Fraction of episodes to use for training (0.0 to 1.0).
         batch_size: Batch size for the DataLoaders.
@@ -196,14 +196,14 @@ def initialize_data(
     """
     metadata_path = os.path.join(data_dir, "dataset_metadata.json")
     if not os.path.exists(metadata_path):
-        raise FileNotFoundError(f"metadata.json not found in {data_dir}")
+        raise FileNotFoundError(f"dataset_metadata.json not found in {data_dir}")
 
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
 
     all_episode_ids = [ep_info["episode_id"] for ep_info in metadata.get("episodes", [])]
     if not all_episode_ids:
-        raise ValueError("No episodes found in metadata.json or 'episodes' key is missing/empty.")
+        raise ValueError("No episodes found in dataset_metadata.json or 'episodes' key is missing/empty.")
     
     print(f"Found a total of {len(all_episode_ids)} episodes: {sorted(all_episode_ids)}")
 
