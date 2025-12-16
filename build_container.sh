@@ -1,27 +1,22 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Set your project details
 PROJECT_ID="mauricearm"
 IMAGE_NAME="act-training"
 TAG="h100-latest"
-REGION="us-central1"
-
-# Use Google Container Registry (simpler - no repository creation needed)
 IMAGE_URI="gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${TAG}"
 
-echo "🐳 Building Docker image: ${IMAGE_URI}"
-echo "⚙️  Building for AMD64 (x86_64) platform for Vertex AI compatibility"
+echo "🐳 Building (linux/amd64) and pushing: ${IMAGE_URI}"
 
-# Build the image for AMD64/x86_64 platform (required for Vertex AI)
-docker build --platform linux/amd64 -t ${IMAGE_URI} .
+# Ensure buildx is available and initialized
+docker buildx create --use --name multiarch-builder >/dev/null 2>&1 || true
+docker buildx inspect --bootstrap >/dev/null
 
-# Configure Docker for GCR
-gcloud auth configure-docker
+# Push directly to registry as amd64
+docker buildx build \
+  --platform=linux/amd64 \
+  -t "${IMAGE_URI}" \
+  --push \
+  .
 
-# Push to GCR
-echo "🚀 Pushing image to Google Container Registry..."
-docker push ${IMAGE_URI}
-
-echo "✅ Image built and pushed successfully!"
-echo "Image URI: ${IMAGE_URI}" 
+echo "✅ Done: ${IMAGE_URI}"
