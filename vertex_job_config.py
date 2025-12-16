@@ -66,7 +66,7 @@ def create_training_job(
         enable_web_access=True,
         # Flex Start provisioning with 10 minute wait for resources
         scheduling_strategy=gca_custom_job_compat.Scheduling.Strategy.FLEX_START,
-        max_wait_duration=1200
+        max_wait_duration=7200
     )
     
     print(f"Training job started: {job.resource_name}")
