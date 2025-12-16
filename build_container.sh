@@ -11,9 +11,10 @@ REGION="us-central1"
 IMAGE_URI="gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${TAG}"
 
 echo "🐳 Building Docker image: ${IMAGE_URI}"
+echo "⚙️  Building for AMD64 (x86_64) platform for Vertex AI compatibility"
 
-# Build the image
-docker build -t ${IMAGE_URI} .
+# Build the image for AMD64/x86_64 platform (required for Vertex AI)
+docker build --platform linux/amd64 -t ${IMAGE_URI} .
 
 # Configure Docker for GCR
 gcloud auth configure-docker
