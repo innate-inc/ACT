@@ -32,14 +32,14 @@ def test_conversion_pipeline():
         print(f"❌ Error: Input directory does not exist: {HDF5_DIR}")
         return False
     
-    # Check if metadata.json exists
-    metadata_path = os.path.join(HDF5_DIR, "metadata.json")
+    # Check if dataset_metadata.json exists
+    metadata_path = os.path.join(HDF5_DIR, "dataset_metadata.json")
     if not os.path.exists(metadata_path):
-        print(f"❌ Error: metadata.json not found in {HDF5_DIR}")
-        print("Please ensure your HDF5 directory contains a metadata.json file")
+        print(f"❌ Error: dataset_metadata.json not found in {HDF5_DIR}")
+        print("Please ensure your HDF5 directory contains a dataset_metadata.json file")
         return False
     
-    print(f"✅ Found metadata.json: {metadata_path}")
+    print(f"✅ Found dataset_metadata.json: {metadata_path}")
     
     # List some HDF5 files to verify structure
     h5_files = [f for f in os.listdir(HDF5_DIR) if f.endswith('.h5')]
