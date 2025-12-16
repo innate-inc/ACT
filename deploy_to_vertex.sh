@@ -73,5 +73,10 @@ python3 vertex_job_config.py \
     --run_name ${RUN_NAME} \
     --job_name ${JOB_NAME}
 
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to submit job"
+    exit 1
+fi
+
 echo "✅ Job submitted successfully!"
 echo "📝 Monitor your job at: https://console.cloud.google.com/vertex-ai/training/custom-jobs?project=${PROJECT_ID}" 
