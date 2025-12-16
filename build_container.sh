@@ -1,22 +1,26 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
+# Set your project details
 PROJECT_ID="mauricearm"
 IMAGE_NAME="act-training"
 TAG="h100-latest"
+REGION="us-central1"
+
+# Use Google Container Registry (simpler - no repository creation needed)
 IMAGE_URI="gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${TAG}"
 
-echo "🐳 Building (linux/amd64) and pushing: ${IMAGE_URI}"
+echo "🐳 Building Docker image: ${IMAGE_URI}"
 
-# Ensure buildx is available and initialized
-docker buildx create --use --name multiarch-builder >/dev/null 2>&1 || true
-docker buildx inspect --bootstrap >/dev/null
+# Build the image
+docker build -t ${IMAGE_URI} .
 
-# Push directly to registry as amd64
-docker buildx build \
-  --platform=linux/amd64 \
-  -t "${IMAGE_URI}" \
-  --push \
-  .
+# Configure Docker for GCR
+gcloud auth configure-docker
 
-echo "✅ Done: ${IMAGE_URI}"
+# Push to GCR
+echo "🚀 Pushing image to Google Container Registry..."
+docker push ${IMAGE_URI}
+
+echo "✅ Image built and pushed successfully!"
+echo "Image URI: ${IMAGE_URI}" 
