@@ -11,6 +11,7 @@ def create_training_job(
     image_uri: str,
     data_path: str,
     output_path: str,
+    run_name: str,
     job_name: Optional[str] = None
 ):
     """Create and submit a Vertex AI training job."""
@@ -21,6 +22,9 @@ def create_training_job(
         location=region,
         staging_bucket=output_path
     )
+    
+    # Construct the full output path with run name
+    full_output_path = f"{output_path.rstrip('/')}/{run_name}"
     
     # Define the custom training job
     job = aiplatform.CustomContainerTrainingJob(
@@ -40,7 +44,7 @@ def create_training_job(
             "--chunk_size", "30"
         ],
         # This is where outputs (checkpoints, logs) will be saved
-        base_output_dir=output_path,
+        base_output_dir=full_output_path,
         # Machine configuration - your powerful specs!
         machine_type="a3-highgpu-4g",            # 4x H100 80GB beast!
         accelerator_type="NVIDIA_H100_80GB",
@@ -54,6 +58,7 @@ def create_training_job(
             "NCCL_DEBUG": "INFO",
             "DATA_BUCKET": data_path,
             "OUTPUT_BUCKET": output_path,
+            "RUN_NAME": run_name,
         },
         # Service account for GCS access
         service_account="train-sa@mauricearm.iam.gserviceaccount.com",
@@ -75,7 +80,7 @@ def create_training_job(
     print(f"Maximum runtime: 48 hours")
     print(f"Service Account: train-sa@mauricearm.iam.gserviceaccount.com")
     print(f"Data will be downloaded from: {data_path}")
-    print(f"Outputs will be synced to: {output_path}")
+    print(f"Outputs will be synced to: {full_output_path}")
     return job
 
 if __name__ == "__main__":
@@ -85,6 +90,7 @@ if __name__ == "__main__":
     parser.add_argument("--image_uri", required=True)
     parser.add_argument("--data_path", required=True, help="GCS path to data (e.g., gs://your-bucket/data)")
     parser.add_argument("--output_path", required=True, help="GCS path for outputs (e.g., gs://your-bucket/outputs)")
+    parser.add_argument("--run_name", required=True, help="Run name for output folder")
     parser.add_argument("--job_name", help="Job name")
     
     args = parser.parse_args()
@@ -95,5 +101,6 @@ if __name__ == "__main__":
         image_uri=args.image_uri,
         data_path=args.data_path,
         output_path=args.output_path,
+        run_name=args.run_name,
         job_name=args.job_name
     ) 

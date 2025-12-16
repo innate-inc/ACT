@@ -168,15 +168,20 @@ if [ -d "$CHECKPOINT_BASE_DIR" ]; then
     LATEST_CHECKPOINT_DIR=$(find "$CHECKPOINT_BASE_DIR" -maxdepth 1 -type d -name "*_ddp" | sort | tail -1)
     
     if [ -n "$LATEST_CHECKPOINT_DIR" ] && [ -d "$LATEST_CHECKPOINT_DIR" ]; then
-        CHECKPOINT_DIR_NAME=$(basename "$LATEST_CHECKPOINT_DIR")
-        GCS_DESTINATION="gs://maurice-prod-data/ckpts/$CHECKPOINT_DIR_NAME"
+        # Use RUN_NAME from environment variable if available, otherwise fall back to directory name
+        if [ -n "$RUN_NAME" ]; then
+            GCS_DESTINATION="${OUTPUT_BUCKET}/${RUN_NAME}"
+        else
+            CHECKPOINT_DIR_NAME=$(basename "$LATEST_CHECKPOINT_DIR")
+            GCS_DESTINATION="gs://maurice-prod-data/ckpts/${CHECKPOINT_DIR_NAME}"
+        fi
         
-        echo "🔄 Uploading checkpoint directory: $CHECKPOINT_DIR_NAME"
+        echo "🔄 Uploading checkpoint contents"
         echo "📂 Source: $LATEST_CHECKPOINT_DIR"
         echo "☁️  Destination: $GCS_DESTINATION"
         
-        # Upload the checkpoint directory to GCS
-        sudo -u "$ACTUAL_USER" gsutil -m cp -r "$LATEST_CHECKPOINT_DIR" "gs://maurice-prod-data/ckpts/"
+        # Upload the checkpoint directory contents to GCS
+        sudo -u "$ACTUAL_USER" gsutil -m cp -r "$LATEST_CHECKPOINT_DIR/"* "$GCS_DESTINATION/"
         
         echo "✅ Checkpoints uploaded successfully to $GCS_DESTINATION"
     else

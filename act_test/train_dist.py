@@ -94,7 +94,12 @@ def train_ddp(rank, world_size, args, webd_dir):
     # Task name and automatic checkpoint directory generation
     TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))
     TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
-    RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}_ddp"
+    
+    # Use RUN_NAME from environment if provided (from Vertex AI), otherwise generate one
+    RUN_NAME = os.environ.get("RUN_NAME")
+    if not RUN_NAME:
+        RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}_ddp"
+    
     CHECKPOINT_DIR = os.path.join(DATA_DIR, "checkpoints", RUN_NAME)
 
     # Use the WebDataset directory passed from main
