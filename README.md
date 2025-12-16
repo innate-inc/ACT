@@ -1,24 +1,26 @@
 # Training ACT policies using Vertex AI
 
-## 1. Upload Your Dataset
+## 1. Authenticate with Google cloud
+
+You need to obtain the service account key from innate, for the `customer-upload` service account. Then use:
+
+```bash
+gcloud auth activate-service-account customer-upload@mauricearm.iam.gserviceaccount.com \
+  --key-file=/path/to/your-service-account-key.json
+```
+
+Also set
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your-service-account-key.json
+```
+
+## 2. Upload Your Dataset
 
 First, upload your dataset to Google Cloud Storage. Typically it would be located in `innate-os/primitives/{primitive_name}/data`. It should contain `h5` files of the collected episodes and `dataset_metadata.json`.
 
 ```bash
-gsutil -m cp -r innate-os/primitives/{primitive_name}/data/* gs://maurice-prod-data/data/{primitive_name}/ 
+gsutil -m cp -r /home/jetson1/innate-os/primitives/{primitive_name}/data/* gs://maurice-prod-data/data/{primitive_name}/ 
 ```
-
-Make sure your account has `storage.objects.delete` rights, so that it can delete temporary files during the upload.
-
-## 2. Authenticate with Google Cloud
-
-If you haven't already, authenticate with Google Cloud to enable the Vertex AI Python SDK:
-
-```bash
-gcloud auth application-default login
-```
-
-This creates application default credentials that the Vertex AI Python SDK can use.
 
 ## 3. Deploy Training Job to Vertex AI
 
@@ -48,21 +50,27 @@ Run the deployment script with three required arguments:
 
 This will create checkpoints in: `gs://maurice-prod-data/ckpts/clean_trash/clean-trash-v1/`
 
-**Note:** The script will check if the checkpoint folder already exists and error if it does, preventing accidental overwrites.
+## 4. Download the Checkpoints
 
-## 4. Monitor Training
+When the training is finished, you can download the checkpoints to your local machine:
 
-After deployment, monitor your training job at:
-https://console.cloud.google.com/vertex-ai/training/custom-jobs?project=mauricearm
-
-## 5. Access Your Trained Model
-
-Once training completes, your checkpoints will be available at:
-```
-gs://maurice-prod-data/ckpts/{primitive_name}/{run_name}/
+```bash
+gsutil -m cp -r gs://maurice-prod-data/ckpts/{primitive_name}/{run_name}/* /home/jetson1/innate-os/primitives/{primitive_name}/models/
 ```
 
-The folder will contain:
-- `dataset_stats.pt` - Normalization statistics
-- `act_policy_step_*.pth` - Training checkpoints (10 total)
+**Example:**
+
+```bash
+gsutil -m cp -r gs://maurice-prod-data/ckpts/clean_trash/clean-trash-v1/* /home/jetson1/innate-os/primitives/clean_trash/models/
+```
+
+The downloaded folder will contain:
+- `dataset_stats.pt` - Normalization statistics for input/output data
+- `act_policy_step_*.pth` - Training checkpoints (saved every 500 steps)
 - `act_policy_final.onnx` - Final model in ONNX format for inference
+
+**Note:** Make sure the destination directory exists before downloading:
+
+```bash
+mkdir -p /home/jetson1/innate-os/primitives/{primitive_name}/models/
+```
