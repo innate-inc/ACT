@@ -62,16 +62,27 @@ TRAIN_EXIT_CODE=$?
 echo "🔄 Training finished, uploading checkpoints..."
 if [ -d "${ACTUAL_DATA_DIR}/checkpoints" ]; then
     # Find the specific checkpoint directory created by train_dist.py
-    CHECKPOINT_RUN_DIR=$(find "${ACTUAL_DATA_DIR}/checkpoints" -maxdepth 1 -type d -name "*_ddp" | head -1)
+    # If RUN_NAME is set, look for that specific directory
+    # Otherwise, find any *_ddp directory
+    if [ -n "$RUN_NAME" ]; then
+        CHECKPOINT_RUN_DIR="${ACTUAL_DATA_DIR}/checkpoints/$RUN_NAME"
+    else
+        CHECKPOINT_RUN_DIR=$(find "${ACTUAL_DATA_DIR}/checkpoints" -maxdepth 1 -type d -name "*_ddp" | head -1)
+    fi
     
     if [ -n "$CHECKPOINT_RUN_DIR" ] && [ -d "$CHECKPOINT_RUN_DIR" ]; then
-        RUN_DIR_NAME=$(basename "$CHECKPOINT_RUN_DIR")
-        echo "📁 Uploading checkpoint directory: $RUN_DIR_NAME"
-        
-        # Upload the specific run directory
-        gcloud storage cp --recursive "$CHECKPOINT_RUN_DIR" "${OUTPUT_BUCKET}/"
-        
-        echo "✅ Checkpoints uploaded to: ${OUTPUT_BUCKET}/${RUN_DIR_NAME}/"
+        # If RUN_NAME is set, upload to OUTPUT_BUCKET/RUN_NAME
+        # Otherwise, upload the directory with its original name
+        if [ -n "$RUN_NAME" ]; then
+            echo "📁 Uploading checkpoint directory for run: $RUN_NAME"
+            gcloud storage cp --recursive "$CHECKPOINT_RUN_DIR/*" "${OUTPUT_BUCKET}/${RUN_NAME}/"
+            echo "✅ Checkpoints uploaded to: ${OUTPUT_BUCKET}/${RUN_NAME}/"
+        else
+            RUN_DIR_NAME=$(basename "$CHECKPOINT_RUN_DIR")
+            echo "📁 Uploading checkpoint directory: $RUN_DIR_NAME"
+            gcloud storage cp --recursive "$CHECKPOINT_RUN_DIR" "${OUTPUT_BUCKET}/"
+            echo "✅ Checkpoints uploaded to: ${OUTPUT_BUCKET}/${RUN_DIR_NAME}/"
+        fi
     else
         echo "⚠️  No checkpoint directory found matching pattern *_ddp"
     fi
