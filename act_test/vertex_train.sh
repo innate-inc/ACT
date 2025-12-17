@@ -164,8 +164,14 @@ CHECKPOINT_BASE_DIR="$LOCAL_DATA_DIR/checkpoints"
 if [ -d "$CHECKPOINT_BASE_DIR" ]; then
     echo "🔍 Found checkpoint directory: $CHECKPOINT_BASE_DIR"
     
-    # Get the most recent checkpoint directory (the one just created)
-    LATEST_CHECKPOINT_DIR=$(find "$CHECKPOINT_BASE_DIR" -maxdepth 1 -type d -name "*_ddp" | sort | tail -1)
+    # Get the checkpoint directory
+    # If RUN_NAME is set, look for that specific directory
+    # Otherwise, find the most recent *_ddp directory
+    if [ -n "$RUN_NAME" ]; then
+        LATEST_CHECKPOINT_DIR="$CHECKPOINT_BASE_DIR/$RUN_NAME"
+    else
+        LATEST_CHECKPOINT_DIR=$(find "$CHECKPOINT_BASE_DIR" -maxdepth 1 -type d -name "*_ddp" | sort | tail -1)
+    fi
     
     if [ -n "$LATEST_CHECKPOINT_DIR" ] && [ -d "$LATEST_CHECKPOINT_DIR" ]; then
         # Use RUN_NAME from environment variable if available, otherwise fall back to directory name
