@@ -2,17 +2,17 @@
 set -e
 
 # =============================================================================
-# Build and Push Container for SFCompute (Docker Hub)
+# Build and Push Container for Lambda Labs (Docker Hub)
 # =============================================================================
 # This script builds the Docker container and pushes to Docker Hub
 #
 # Usage:
-#   ./build_container_sfcompute.sh [DOCKER_USERNAME] [IMAGE_TAG]
+#   ./build_container_lambda.sh [DOCKER_USERNAME] [IMAGE_TAG]
 #
 # Examples:
-#   ./build_container_sfcompute.sh                    # Uses defaults
-#   ./build_container_sfcompute.sh myusername         # Custom username
-#   ./build_container_sfcompute.sh myusername v1.0    # Custom username and tag
+#   ./build_container_lambda.sh                    # Uses defaults
+#   ./build_container_lambda.sh myusername         # Custom username
+#   ./build_container_lambda.sh myusername v1.0    # Custom username and tag
 # =============================================================================
 
 # Configuration
@@ -23,8 +23,8 @@ TAG="${2:-latest}"
 # Full image URI
 IMAGE_URI="${DOCKER_USERNAME}/${IMAGE_NAME}:${TAG}"
 
-echo "🐳 Building Docker Image for SFCompute"
-echo "======================================="
+echo "🐳 Building Docker Image for Lambda Labs"
+echo "========================================="
 echo "📦 Image: ${IMAGE_URI}"
 echo ""
 
@@ -41,34 +41,34 @@ if ! docker info 2>/dev/null | grep -q "Username"; then
     docker login
 fi
 
-# Build the image using the sfcompute Dockerfile
+# Build the image using the lambda Dockerfile
 echo ""
 echo "🔨 Building image (no cache - fresh build)..."
-docker build --no-cache -t ${IMAGE_URI} -f Dockerfile.sfcompute .
+docker build --no-cache -t ${IMAGE_URI} -f Dockerfile.lambda .
 
 # Tag with additional tags
-docker tag ${IMAGE_URI} ${DOCKER_USERNAME}/${IMAGE_NAME}:h100
-docker tag ${IMAGE_URI} ${DOCKER_USERNAME}/${IMAGE_NAME}:sfcompute
+docker tag ${IMAGE_URI} ${DOCKER_USERNAME}/${IMAGE_NAME}:lambda
+docker tag ${IMAGE_URI} ${DOCKER_USERNAME}/${IMAGE_NAME}:gpu
 
 # Push to Docker Hub
 echo ""
 echo "🚀 Pushing image to Docker Hub..."
 docker push ${IMAGE_URI}
-docker push ${DOCKER_USERNAME}/${IMAGE_NAME}:h100
-docker push ${DOCKER_USERNAME}/${IMAGE_NAME}:sfcompute
+docker push ${DOCKER_USERNAME}/${IMAGE_NAME}:lambda
+docker push ${DOCKER_USERNAME}/${IMAGE_NAME}:gpu
 
 echo ""
 echo "✅ Image built and pushed successfully!"
 echo "======================================="
 echo "Image URIs:"
 echo "  - ${IMAGE_URI}"
-echo "  - ${DOCKER_USERNAME}/${IMAGE_NAME}:h100"
-echo "  - ${DOCKER_USERNAME}/${IMAGE_NAME}:sfcompute"
+echo "  - ${DOCKER_USERNAME}/${IMAGE_NAME}:lambda"
+echo "  - ${DOCKER_USERNAME}/${IMAGE_NAME}:gpu"
 echo ""
-echo "📝 To use this image on SFCompute K8s:"
-echo "   kubectl apply -f k8s-act-training.yaml"
-echo ""
-echo "📝 To use this image on SFCompute (direct SSH):"
-echo "   1. SSH into your node: sf nodes ssh root@<node-name>"
+echo "📝 To use this image on Lambda Labs:"
+echo "   1. SSH into your Lambda Labs instance"
 echo "   2. Pull the image: docker pull ${IMAGE_URI}"
 echo "   3. Run with GPU: docker run --gpus all -v /data:/data ${IMAGE_URI}"
+echo "   4. Or run training: docker run --gpus all -v /data:/data ${IMAGE_URI} \\"
+echo "        ./lambda_train.sh --data_gcs_path gs://bucket/data"
+
