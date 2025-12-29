@@ -1,23 +1,20 @@
 #!/bin/bash
 # =============================================================================
-# sfcompute_train.sh
+# lambda_train.sh
 # =============================================================================
-# Training script for SFCompute nodes
-# Downloads data from GCS to local NVMe storage and runs distributed training
+# Training script for Lambda Labs GPU instances
+# Downloads data from GCS to local storage and runs distributed training
 #
 # Usage:
-#   ./sfcompute_train.sh [OPTIONS]
+#   ./lambda_train.sh [OPTIONS]
 #
-# This script is designed to run on SFCompute H100 nodes with:
-#   - NVMe storage mounted at /data (2TB+)
-#   - 4x H100 GPUs
+# This script is designed to run on Lambda Labs GPU instances with:
+#   - Local storage (typically /data or /home)
+#   - Multiple GPUs (A100, H100, etc.)
 #   - GCS access for data download
 # =============================================================================
 
 set -e
-
-# Add local bin to PATH
-export PATH="/root/.local/bin:$PATH"
 
 # =============================================================================
 # Default Configuration
@@ -81,7 +78,7 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
-            echo "SFCompute Training Script - Downloads data from GCS and runs distributed training"
+            echo "Lambda Labs Training Script - Downloads data from GCS and runs distributed training"
             echo ""
             echo "Options:"
             echo "  --world_size INT              Number of GPUs (default: 4)"
@@ -116,8 +113,8 @@ done
 # =============================================================================
 # Print Configuration
 # =============================================================================
-echo "🚀 SFCompute ACT Training Pipeline"
-echo "==================================="
+echo "🚀 Lambda Labs ACT Training Pipeline"
+echo "====================================="
 echo ""
 echo "📊 Configuration:"
 echo "   World size (GPUs):     ${WORLD_SIZE}"
@@ -138,11 +135,6 @@ echo ""
 echo "🔍 System Checks"
 echo "================"
 
-# Check if running as root (recommended for SFCompute)
-if [ "$EUID" -ne 0 ]; then
-    echo "⚠️  Warning: Not running as root. Some operations may fail."
-fi
-
 # Check GPU availability
 echo ""
 echo "🎮 GPU Information:"
@@ -162,10 +154,14 @@ else
     exit 1
 fi
 
-# Check NVMe storage
+# Check storage
 echo ""
 echo "💾 Storage Information:"
-df -h /data 2>/dev/null || echo "   /data not mounted - using local storage"
+if [ -d "/data" ]; then
+    df -h /data
+else
+    echo "   /data not available - using ${LOCAL_DATA_DIR}"
+fi
 
 # =============================================================================
 # Step 2: Setup Data Directory
@@ -175,14 +171,13 @@ echo "📁 Setting Up Data Directory"
 echo "============================"
 
 mkdir -p "${LOCAL_DATA_DIR}"
-mkdir -p "/data/checkpoints"
-mkdir -p "/data/outputs"
-chmod -R 777 /data
+mkdir -p "${LOCAL_DATA_DIR}/checkpoints"
+mkdir -p "${LOCAL_DATA_DIR}/outputs"
 
 echo "✅ Directories created:"
 echo "   Data:        ${LOCAL_DATA_DIR}"
-echo "   Checkpoints: /data/checkpoints"
-echo "   Outputs:     /data/outputs"
+echo "   Checkpoints: ${LOCAL_DATA_DIR}/checkpoints"
+echo "   Outputs:     ${LOCAL_DATA_DIR}/outputs"
 
 # =============================================================================
 # Step 3: Download Data from GCS (if specified)
@@ -213,7 +208,7 @@ if [ -n "${DATA_GCS_PATH}" ]; then
     if [ -d "${LOCAL_DATA_DIR}" ] && [ "$(ls -A ${LOCAL_DATA_DIR} 2>/dev/null)" ]; then
         echo ""
         echo "📂 Data already exists locally:"
-        ls -la "${LOCAL_DATA_DIR}/"
+        ls -la "${LOCAL_DATA_DIR}/" | head -10
         echo ""
         read -p "Re-download data? (y/N): " -n 1 -r
         echo
@@ -242,7 +237,7 @@ if [ -n "${DATA_GCS_PATH}" ]; then
     echo "📊 Data Statistics:"
     echo "   Size: $(du -sh ${LOCAL_DATA_DIR} | cut -f1)"
     echo "   Files: $(find ${LOCAL_DATA_DIR} -type f | wc -l)"
-    ls -la "${LOCAL_DATA_DIR}/"
+    ls -la "${LOCAL_DATA_DIR}/" | head -10
 else
     echo ""
     echo "📁 Using Local Data"
@@ -356,7 +351,7 @@ if [ -n "${OUTPUT_GCS_PATH}" ]; then
             echo "   Destination: ${GCS_DEST}"
             echo ""
             echo "   Contents:"
-            ls -la "${LATEST_CKPT}/"
+            ls -la "${LATEST_CKPT}/" | head -10
             echo ""
             
             echo "🔄 Uploading..."

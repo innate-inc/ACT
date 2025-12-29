@@ -89,9 +89,9 @@ COPY setup.py ./
 RUN pip install --no-deps -e .
 
 # Copy scripts
-COPY download_data_sfcompute.sh /app/
-COPY act_test/sfcompute_train.sh /app/
-RUN chmod +x /app/download_data_sfcompute.sh /app/sfcompute_train.sh
+COPY download_data_lambda.sh /app/
+COPY act_test/lambda_train.sh /app/
+RUN chmod +x /app/download_data_lambda.sh /app/lambda_train.sh
 
 # Create directories for data and outputs
 RUN mkdir -p /app/data /app/outputs /app/checkpoints
@@ -112,8 +112,8 @@ echo "📁 Mount your data:"
 echo "   docker run --gpus all -v /data:/data <image>"
 echo ""
 echo "🏋️ Training commands:"
-echo "   1. Download data:  ./download_data_sfcompute.sh gs://bucket/path"
-echo "   2. Run training:   ./sfcompute_train.sh --data_gcs_path gs://bucket/path"
+echo "   1. Download data:  ./download_data_lambda.sh gs://bucket/path"
+echo "   2. Run training:   ./lambda_train.sh --data_gcs_path gs://bucket/path"
 echo ""
 echo "   Or directly:"
 echo "   python -m act_test.train_dist --data_dir /data/dataset"
@@ -161,7 +161,7 @@ CMD []
 #   docker run --gpus all -v /data:/data \
 #     -v ~/.config/gcloud:/root/.config/gcloud \
 #     yourusername/act-training:lambda \
-#     ./sfcompute_train.sh --data_gcs_path gs://bucket/data
+#     ./lambda_train.sh --data_gcs_path gs://bucket/data
 #
 # =============================================================================
 

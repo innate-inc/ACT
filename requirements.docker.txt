@@ -37,6 +37,3 @@ wandb==0.19.7
 # Development tools
 ipython==8.32.0
 
-# Google Cloud (for Vertex AI)
-google-cloud-aiplatform>=1.40.0
-
