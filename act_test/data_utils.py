@@ -194,16 +194,19 @@ def initialize_data(
             - val_dataloader: DataLoader for the validation set.
             - dataset_stats: Normalization statistics computed from the training set.
     """
+    # Check for metadata file (try both naming conventions)
     metadata_path = os.path.join(data_dir, "metadata.json")
     if not os.path.exists(metadata_path):
-        raise FileNotFoundError(f"metadata.json not found in {data_dir}")
+        metadata_path = os.path.join(data_dir, "dataset_metadata.json")
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"metadata.json or dataset_metadata.json not found in {data_dir}")
 
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
 
     all_episode_ids = [ep_info["episode_id"] for ep_info in metadata.get("episodes", [])]
     if not all_episode_ids:
-        raise ValueError("No episodes found in metadata.json or 'episodes' key is missing/empty.")
+        raise ValueError("No episodes found in metadata file or 'episodes' key is missing/empty.")
     
     print(f"Found a total of {len(all_episode_ids)} episodes: {sorted(all_episode_ids)}")
 
