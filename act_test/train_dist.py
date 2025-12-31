@@ -1,3 +1,4 @@
+import sys
 import torch
 import torch.optim as optim
 import torch.distributed as dist
@@ -686,7 +687,7 @@ def main():
     
     if not conversion_success:
         print("❌ Failed to convert data. Exiting...")
-        return
+        sys.exit(1)  # Exit with error code so orchestrator detects failure
     
     print(f"\n{'='*80}")
     print(f"STARTING DISTRIBUTED TRAINING")
