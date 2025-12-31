@@ -1,0 +1,46 @@
+# Environment files (contain secrets)
+.env
+*.env
+env.local
+
+# GCS service account key (secret)
+gcs-key-auth.json
+gcs-key.json
+*.json.secret
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+*.egg-info
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Docker
+docker-compose*.yaml
+docker-compose*.yml
+Dockerfile.dev
+
+# Deployment scripts (not needed in container)
+deploy_to_gcp.sh
+env.template
+
+# Documentation
+README.md
+*.md
+
+# Test files
+tests/
+test_*.py
+*_test.py
+

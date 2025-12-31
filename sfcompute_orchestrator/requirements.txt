@@ -1,0 +1,22 @@
+# Lambda Labs GPU Orchestrator Dependencies
+
+# Web framework
+flask>=3.0.0
+
+# Redis client
+redis>=5.0.0
+
+# HTTP requests (for Lambda Labs API)
+requests>=2.31.0
+
+# For production deployment
+gunicorn>=21.0.0
+
+# Utilities
+python-dateutil>=2.8.0
+
+# SSH client for remote log retrieval
+paramiko>=3.4.0
+
+# Google Cloud Secret Manager (for SSH key storage)
+google-cloud-secret-manager>=2.18.0

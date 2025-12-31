@@ -1,0 +1,47 @@
+# Ignore everything except what's needed for the Docker build
+.git
+.gitignore
+.env
+.env.*
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local files
+*.log
+*.tmp
+.DS_Store
+
+# Secrets - never upload
+gcs-key-auth.json
+.ssh_private_key.pem
+secrets/
+
+# Documentation
+*.md
+LICENSE
+
+# Test files
+tests/
+test_*.py
+*_test.py
+

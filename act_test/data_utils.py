@@ -571,7 +571,15 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     if len(all_files) == 0:
         raise FileNotFoundError(f"No WebDataset .tar files found in {data_dir}")
     
-    print(f"Found {len(all_files)} WebDataset files")
+    num_shards = len(all_files)
+    print(f"Found {num_shards} WebDataset files")
+    
+    # Auto-reduce num_workers if we have fewer shards than workers
+    # Each worker needs at least one shard to avoid "No samples found" error
+    if num_workers > num_shards:
+        old_workers = num_workers
+        num_workers = max(1, num_shards)
+        print(f"⚠️  Reducing num_workers from {old_workers} to {num_workers} (only {num_shards} shards available)")
     
     # Create pattern for all files
     if len(all_files) == 1:
