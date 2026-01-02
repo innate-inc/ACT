@@ -512,20 +512,26 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
     # QPos statistics
     qpos_mean = qpos_sum / qpos_count
     qpos_var = (qpos_sum_sq / qpos_count) - (qpos_mean ** 2)
+    # Clamp variance to non-negative before sqrt to prevent NaN from floating point errors
+    qpos_var = torch.clamp(qpos_var, min=0)
     qpos_std = torch.clamp(torch.sqrt(qpos_var), min=1e-6)
     
     # Action statistics
     action_mean = action_sum / action_count
     action_var = (action_sum_sq / action_count) - (action_mean ** 2)
+    # Clamp variance to non-negative before sqrt to prevent NaN from floating point errors
+    action_var = torch.clamp(action_var, min=0)
     action_std = torch.clamp(torch.sqrt(action_var), min=1e-6)
     
     # Camera statistics
     cam1_mean = (cam1_sum / cam1_count).reshape(-1, 1, 1)  # (3, 1, 1)
     cam1_var = (cam1_sum_sq / cam1_count) - (cam1_sum / cam1_count) ** 2
+    cam1_var = torch.clamp(cam1_var, min=0)  # Prevent negative variance from float precision
     cam1_std = torch.clamp(torch.sqrt(cam1_var), min=1e-6).reshape(-1, 1, 1)
     
     cam2_mean = (cam2_sum / cam2_count).reshape(-1, 1, 1)  # (3, 1, 1)
     cam2_var = (cam2_sum_sq / cam2_count) - (cam2_sum / cam2_count) ** 2
+    cam2_var = torch.clamp(cam2_var, min=0)  # Prevent negative variance from float precision
     cam2_std = torch.clamp(torch.sqrt(cam2_var), min=1e-6).reshape(-1, 1, 1)
     
     dataset_stats = {
