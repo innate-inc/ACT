@@ -38,6 +38,43 @@ sys.path.append(str(Path(__file__).parent))
 from ACT import ACTPolicy, ACTConfig
 
 
+def create_act_config(action_dim=8):
+    """Create ACT configuration matching the behavior server setup."""
+    input_shapes = {
+        "observation.image_camera_1": [3, 224, 224],
+        "observation.image_camera_2": [3, 224, 224],
+        "observation.state": [6],
+    }
+
+    output_shapes = {
+        "action": [action_dim],
+    }
+
+    return ACTConfig(
+        n_obs_steps=1,
+        chunk_size=30,
+        n_action_steps=1,
+        speed=1.0,
+        input_shapes=input_shapes,
+        output_shapes=output_shapes,
+        vision_backbone="resnet18",
+        replace_final_stride_with_dilation=False,
+        pre_norm=False,
+        dim_model=512,
+        n_heads=8,
+        dim_feedforward=3200,
+        n_encoder_layers=4,
+        n_decoder_layers=4,
+        use_vae=True,
+        dropout=0.1,
+        kl_weight=10.0,
+        temporal_ensemble_coeff=0.01,
+        optimizer_lr=1e-5,
+        optimizer_weight_decay=1e-4,
+        optimizer_lr_backbone=1e-5,
+    )
+
+
 def generate_random_batch(batch_size: int, config: ACTConfig, device: torch.device) -> Dict[str, torch.Tensor]:
     """
     Generate a random batch of data matching the model's expected input format for inference.
@@ -249,13 +286,8 @@ def main():
     WARMUP_ITERATIONS = 10
     USE_COMPILE = True  # Use torch.compile for optimized inference
     
-    # Image and action dimensions - using 224x224 for faster training
-    IMAGE_H = 224
-    IMAGE_W = 224
-    IMAGE_C = 3
-    QPOS_DIM = 6
+    # Action dimension from behavior metadata/config
     ACTION_DIM = 10
-    CHUNK_SIZE = 30  # Default from train_dist.py
     
     # Use GPU 0
     if not torch.cuda.is_available():
@@ -267,41 +299,8 @@ def main():
     print(f"   GPU Name: {torch.cuda.get_device_name(0)}")
     print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
     
-    # Create model configuration (matching train_dist.py exactly)
-    config = ACTConfig(
-        # Input/output structure
-        n_obs_steps=1,
-        chunk_size=CHUNK_SIZE,
-        n_action_steps=CHUNK_SIZE,
-        input_shapes={
-            "observation.image_camera_1": [IMAGE_C, IMAGE_H, IMAGE_W],
-            "observation.image_camera_2": [IMAGE_C, IMAGE_H, IMAGE_W],
-            "observation.state": [QPOS_DIM],
-        },
-        output_shapes={
-            "action": [ACTION_DIM],
-        },
-        
-        # Architecture
-        vision_backbone="resnet18",
-        pretrained_backbone_weights="ResNet18_Weights.IMAGENET1K_V1",
-        
-        # Transformer
-        dim_model=512,
-        n_heads=8,
-        dim_feedforward=3200,
-        n_encoder_layers=4,
-        n_decoder_layers=4,
-        
-        # VAE
-        use_vae=True,
-        latent_dim=32,
-        n_vae_encoder_layers=4,
-        
-        # Training
-        dropout=0.1,
-        kl_weight=10.0,
-    )
+    # Create model configuration matching behavior server
+    config = create_act_config(action_dim=ACTION_DIM)
     
     print("\n🏗️  Creating dummy dataset statistics for benchmarking...")
     dataset_stats = create_dummy_dataset_stats(config, device)
@@ -336,9 +335,9 @@ def main():
         print("\n⚡ Skipping model compilation")
     
     print(f"\n📦 Batch Structure (batch_size={BATCH_SIZE}):")
-    print(f"   observation.image_camera_1: [{BATCH_SIZE}, {IMAGE_C}, {IMAGE_H}, {IMAGE_W}]")
-    print(f"   observation.image_camera_2: [{BATCH_SIZE}, {IMAGE_C}, {IMAGE_H}, {IMAGE_W}]")
-    print(f"   observation.state:          [{BATCH_SIZE}, {QPOS_DIM}]")
+    print(f"   observation.image_camera_1: [{BATCH_SIZE}, 3, 224, 224]")
+    print(f"   observation.image_camera_2: [{BATCH_SIZE}, 3, 224, 224]")
+    print(f"   observation.state:          [{BATCH_SIZE}, 6]")
     
     # Run benchmark
     results = benchmark_inference(
