@@ -13,6 +13,11 @@ pillow==11.1.0
 huggingface-hub==0.31.2
 timm==1.0.15
 safetensors==0.5.3
+onnx
+
+# TensorRT (for inference optimization)
+# Note: Uses PyTorch tensors for memory management (no pycuda needed)
+tensorrt
 
 # Data handling
 h5py==3.13.0
