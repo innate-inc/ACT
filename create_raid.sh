@@ -12,7 +12,8 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Define the NVMe devices to be used.
-DEVICES="/dev/nvme0n1 /dev/nvme0n2 /dev/nvme0n3 /dev/nvme0n4"
+# Note: nvme0n1 is the boot disk, so we use nvme1n1 through nvme4n1
+DEVICES="/dev/nvme1n1 /dev/nvme2n1 /dev/nvme3n1 /dev/nvme4n1"
 echo "Creating RAID 0 array /dev/md0 using devices: $DEVICES"
 mdadm --create --verbose /dev/md0 --level=0 --raid-devices=4 $DEVICES
 

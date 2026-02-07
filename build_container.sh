@@ -4,8 +4,8 @@ set -e
 # Set your project details
 PROJECT_ID="mauricearm"
 IMAGE_NAME="act-training"
-TAG="latest"
-REGION="us-east5"
+TAG="h100"
+REGION="us-central1"
 
 # Use Google Container Registry (simpler - no repository creation needed)
 IMAGE_URI="gcr.io/${PROJECT_ID}/${IMAGE_NAME}:${TAG}"

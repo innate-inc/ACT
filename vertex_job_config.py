@@ -2,6 +2,7 @@
 
 import argparse
 from google.cloud import aiplatform
+from google.cloud.aiplatform_v1.types import custom_job as gca_custom_job_compat
 from typing import Optional
 
 def create_training_job(
@@ -33,15 +34,16 @@ def create_training_job(
         # The container will handle data download and training
         # Pass training arguments after the download script
         args=[
-            "--max_steps", "15000",
+            "--max_steps", "120000",
             "--learning_rate", "5e-5",
+            "--learning_rate_backbone", "5e-5",
             "--chunk_size", "30"
         ],
         # This is where outputs (checkpoints, logs) will be saved
         base_output_dir=output_path,
         # Machine configuration - your powerful specs!
-        machine_type="a2-ultragpu-4g",           # 4x A100 80GB beast!
-        accelerator_type="NVIDIA_A100_80GB",
+        machine_type="a3-highgpu-4g",            # 4x H100 80GB beast!
+        accelerator_type="NVIDIA_H100_80GB",
         accelerator_count=4,
         # Disk configuration
         boot_disk_type="pd-ssd",
@@ -57,14 +59,20 @@ def create_training_job(
         service_account="train-sa@mauricearm.iam.gserviceaccount.com",
         # Restart policy
         restart_job_on_worker_restart=True,
-        # Longer timeout for data download + training
-        timeout=3600 * 48,  # 48 hours
+        # Maximum runtime duration for the job itself (48 hours)
+        # This is separate from max_wait_duration
+        timeout=3600 * 12,  # 48 hours
         # Enable early stopping
         enable_web_access=True,
+        # Flex Start provisioning with 10 minute wait for resources
+        scheduling_strategy=gca_custom_job_compat.Scheduling.Strategy.FLEX_START,
+        max_wait_duration=1200
     )
     
     print(f"Training job started: {job.resource_name}")
-    print(f"Machine: a2-ultragpu-4g with 4x A100 80GB GPUs")
+    print(f"Machine: a3-highgpu-4g with 4x H100 80GB GPUs")
+    print(f"Provisioning: Flex Start (will queue up to 10 minutes for resources)")
+    print(f"Maximum runtime: 48 hours")
     print(f"Service Account: train-sa@mauricearm.iam.gserviceaccount.com")
     print(f"Data will be downloaded from: {data_path}")
     print(f"Outputs will be synced to: {output_path}")
@@ -73,7 +81,7 @@ def create_training_job(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--project_id", required=True)
-    parser.add_argument("--region", default="us-east5")
+    parser.add_argument("--region", default="us-central1")
     parser.add_argument("--image_uri", required=True)
     parser.add_argument("--data_path", required=True, help="GCS path to data (e.g., gs://your-bucket/data)")
     parser.add_argument("--output_path", required=True, help="GCS path for outputs (e.g., gs://your-bucket/outputs)")
