@@ -100,11 +100,18 @@ def train_ddp(rank, world_size, args, webd_dir):
     # Training optimization parameters
     USE_BF16 = args.use_bf16  # BF16 mixed precision training
     USE_COMPILE = args.use_compile  # torch.compile() optimization
+    NORMALIZE_DATA = args.normalize_data  # Normalize actions and robot state
 
     # Task name and automatic checkpoint directory generation
     TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))
     TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
-    RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}_innate_ddp"
+    
+    # Use custom wandb run name if provided, otherwise auto-generate
+    if args.wandb_run_name:
+        RUN_NAME = args.wandb_run_name
+    else:
+        RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}_innate_ddp"
+    
     CHECKPOINT_DIR = os.path.join(DATA_DIR, "checkpoints", RUN_NAME)
 
     # Use the WebDataset directory passed from main
@@ -201,6 +208,7 @@ def train_ddp(rank, world_size, args, webd_dir):
             # Optimization
             "use_bf16": USE_BF16,
             "use_compile": USE_COMPILE,
+            "normalize_data": NORMALIZE_DATA,
             "learning_rate": LEARNING_RATE,
             "weight_decay": WEIGHT_DECAY,
             "lr_backbone": LEARNING_RATE_BACKBONE,
@@ -241,7 +249,8 @@ def train_ddp(rank, world_size, args, webd_dir):
             train_val_split=TRAIN_VAL_SPLIT,
             num_workers=NUM_WORKERS,
             prefetch_factor=2,
-            seed=42 + rank
+            seed=42 + rank,
+            normalize=NORMALIZE_DATA  # Use the normalization flag
         )
     except (FileNotFoundError, ValueError) as e:
         if rank == 0:
@@ -557,14 +566,33 @@ def train_ddp(rank, world_size, args, webd_dir):
                         else:
                             actions_pred = policy.module.sample_actions(global_cond, use_heun=True)
                         
-                        # Compute action prediction errors
+                        # === PRIMARY METRICS: Normalized errors (percentage-like interpretation) ===
+                        # With normalized data ~N(0,1), error of 0.1 ≈ 10% relative error
                         action_l1_error = torch.abs(actions_pred - actions_gt).mean()
                         action_l2_error = torch.sqrt(((actions_pred - actions_gt) ** 2).mean())
                         
-                        # Per-timestep errors (useful to see if early/late actions are harder)
+                        # Per-dimension errors (normalized, for balanced comparison across dimensions)
+                        action_l1_per_dim = torch.abs(actions_pred - actions_gt).mean(dim=(0, 1))  # [action_dim]
+                        
+                        # Per-timestep errors (normalized, to see if early/late actions are harder)
                         action_l1_per_timestep = torch.abs(actions_pred - actions_gt).mean(dim=(0, 2))  # [T]
                         action_l1_first = action_l1_per_timestep[0].item()
                         action_l1_last = action_l1_per_timestep[-1].item()
+                        
+                        # === SECONDARY METRICS: Physical units (for real-world interpretation) ===
+                        if NORMALIZE_DATA:
+                            action_mean = dataset_stats['action']['mean'].to(device)
+                            action_std = dataset_stats['action']['std'].to(device)
+                            actions_pred_phys = actions_pred * action_std + action_mean
+                            actions_gt_phys = actions_gt * action_std + action_mean
+                            
+                            # Compute physical errors (secondary, for interpretation)
+                            action_l1_error_physical = torch.abs(actions_pred_phys - actions_gt_phys).mean()
+                            action_l2_error_physical = torch.sqrt(((actions_pred_phys - actions_gt_phys) ** 2).mean())
+                        else:
+                            # If no normalization, normalized and physical are the same
+                            action_l1_error_physical = action_l1_error
+                            action_l2_error_physical = action_l2_error
                         
                         if device.type == 'cuda':
                             torch.cuda.synchronize()
@@ -577,14 +605,23 @@ def train_ddp(rank, world_size, args, webd_dir):
                         
                         # Log all metrics to WandB
                         wandb.log({
-                            # Flow matching loss
+                            # Flow matching loss (on normalized data)
                             "val/flow_matching_loss": loss_val.item(),
                             
-                            # Action prediction errors
+                            # PRIMARY: Action prediction errors (NORMALIZED - percentage-like)
+                            # Error of 0.1 ≈ 10% relative error since data is ~N(0,1)
                             "val/action_l1_error": action_l1_error.item(),
                             "val/action_l2_error": action_l2_error.item(),
                             "val/action_l1_first_step": action_l1_first,
                             "val/action_l1_last_step": action_l1_last,
+                            
+                            # SECONDARY: Physical units (for real-world interpretation)
+                            "val/action_l1_error_physical": action_l1_error_physical.item(),
+                            "val/action_l2_error_physical": action_l2_error_physical.item(),
+                            
+                            # Per-dimension errors (normalized, for debugging - first 5 dims)
+                            **{f"val/action_l1_dim_{i}": action_l1_per_dim[i].item() 
+                               for i in range(min(5, len(action_l1_per_dim)))},
                             
                             # Timing
                             "val_timing/batch_load_ms": batch_load_time * 1000,
@@ -597,12 +634,10 @@ def train_ddp(rank, world_size, args, webd_dir):
                         overall_pbar.write(
                             f"Validation at step {step}: "
                             f"Loss={loss_val.item():.4f}, "
-                            f"L1={action_l1_error.item():.4f}, "
+                            f"L1={action_l1_error.item():.4f} (~{action_l1_error.item()*100:.1f}%), "
                             f"L2={action_l2_error.item():.4f}, "
-                            f"Time={total_val_time*1000:.1f}ms "
-                            f"(load={batch_load_time*1000:.1f}ms, "
-                            f"forward={forward_time*1000:.1f}ms, "
-                            f"sampling={sampling_time*1000:.1f}ms)"
+                            f"L1_phys={action_l1_error_physical.item():.4f}, "
+                            f"Time={total_val_time*1000:.1f}ms"
                         )
                         
                     except StopIteration:
@@ -706,12 +741,16 @@ def main():
                         help='Use BF16 mixed precision: true or false (default: true)')
     parser.add_argument('--use-compile', type=lambda x: x.lower() == 'true', default=True,
                         help='Use torch.compile() optimization: true or false (default: true)')
+    parser.add_argument('--normalize-data', type=lambda x: x.lower() == 'true', default=True,
+                        help='Normalize actions and robot state: true or false (default: true)')
     
     # W&B Configuration
     parser.add_argument('--wandb_project', type=str, default='innate-policy',
                         help='W&B project name (default: innate-policy)')
     parser.add_argument('--wandb_entity', type=str, default=None,
                         help='W&B entity/username (default: None)')
+    parser.add_argument('--wandb_run_name', type=str, default=None,
+                        help='W&B run name (default: auto-generated from task and timestamp)')
     parser.add_argument('--wandb_api_key', type=str, 
                         default='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',
                         help='W&B API key (default: hardcoded key)')
@@ -754,6 +793,7 @@ def main():
     print(f"  Batch size per GPU: {args.batch_size}")
     print(f"  Total effective batch: {args.batch_size * world_size}")
     print(f"  Workers per GPU: {args.num_workers}")
+    print(f"  Normalization: {'✅ ENABLED (actions & state normalized to ~N(0,1))' if args.normalize_data else '⚠️  DISABLED (raw values)'}")
     print(f"\nModel:")
     print(f"  Architecture: InnatePolicy (DINOv2 + Flow Matching)")
     print(f"  State dim: {args.state_dim}")

@@ -371,10 +371,35 @@ def val_split_filter(x, split_ratio=0.8):
     return np.random.random() >= split_ratio
 
 class WebDatasetDecoder:
-    """Picklable decoder class for WebDataset."""
+    """Picklable decoder class for WebDataset with optional normalization."""
     
-    def __init__(self, chunk_size):
+    def __init__(self, chunk_size, normalize=False, dataset_stats=None):
+        """
+        Args:
+            chunk_size: Action sequence length
+            normalize: Whether to normalize actions and robot state
+            dataset_stats: Dict with normalization statistics (required if normalize=True)
+        """
         self.chunk_size = chunk_size
+        self.normalize = normalize
+        self.dataset_stats = dataset_stats
+        
+        if normalize and dataset_stats is None:
+            raise ValueError("dataset_stats must be provided when normalize=True")
+        
+        # Extract stats for normalization if needed
+        if normalize:
+            # Robot state (qpos) stats
+            self.qpos_mean = dataset_stats['observation.state']['mean']
+            self.qpos_std = dataset_stats['observation.state']['std']
+            # Avoid division by zero
+            self.qpos_std = torch.where(self.qpos_std > 1e-6, self.qpos_std, torch.ones_like(self.qpos_std))
+            
+            # Action stats
+            self.action_mean = dataset_stats['action']['mean']
+            self.action_std = dataset_stats['action']['std']
+            # Avoid division by zero
+            self.action_std = torch.where(self.action_std > 1e-6, self.action_std, torch.ones_like(self.action_std))
     
     def __call__(self, sample_tuple):
         """Decode a single sample from WebDataset and convert to ACT policy format."""
@@ -384,6 +409,11 @@ class WebDatasetDecoder:
         # Convert to float32, HWC to CHW, and normalize to [0, 1]
         cam1_tensor = cam1.float().permute(2, 0, 1) * (1.0/255.0)
         cam2_tensor = cam2.float().permute(2, 0, 1) * (1.0/255.0)
+        
+        # Normalize robot state if enabled
+        qpos_tensor = qpos.float()
+        if self.normalize:
+            qpos_tensor = (qpos_tensor - self.qpos_mean) / self.qpos_std
         
         # Handle action chunking and padding
         # actions is already a PyTorch tensor (float16 from .pth file)
@@ -400,12 +430,19 @@ class WebDatasetDecoder:
             is_pad_tensor = torch.ones(self.chunk_size, dtype=torch.bool)
             is_pad_tensor[:original_length] = False
         
+        # Normalize actions if enabled
+        if self.normalize:
+            # Only normalize non-padded actions
+            for t in range(self.chunk_size):
+                if not is_pad_tensor[t]:
+                    padded_actions[t] = (padded_actions[t] - self.action_mean) / self.action_std
+        
         # Convert to ACT policy expected format
         sample = {
             'observation.image_camera_1': cam1_tensor,  # (3, H, W)
             'observation.image_camera_2': cam2_tensor,  # (3, H, W)
-            'observation.state': qpos.float(),  # (6,) - already a tensor
-            'action': padded_actions,  # (chunk_size, action_dim)
+            'observation.state': qpos_tensor,  # (6,) - normalized if enabled
+            'action': padded_actions,  # (chunk_size, action_dim) - normalized if enabled
             'action_is_pad': is_pad_tensor  # (chunk_size,)
         }
         
@@ -555,10 +592,14 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
 
 def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8, 
                               train_val_split=0.8, num_workers=4, 
-                              prefetch_factor=2, seed=42, compute_stats_from_all=True):
+                              prefetch_factor=2, seed=42, compute_stats_from_all=True,
+                              normalize=True):
     """
     Initialize WebDataset-based training and validation dataloaders.
     Uses WebDataset's built-in splitting mechanism.
+    
+    Args:
+        normalize: If True, normalize actions and robot state to ~N(0,1) using dataset stats
     """
     
     # Set random seed for reproducible splits
@@ -595,16 +636,41 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     
     print(f"Using dataset pattern: {full_pattern}")
     
-    # Create decode functions - no augmentation parameters
-    decode_fn = WebDatasetDecoder(chunk_size)
-    
-    # Create split functions using functional approach
+    # Step 1: Create temporary unnormalized dataloader to compute stats
+    print("Step 1/3: Computing dataset statistics from unnormalized data...")
+    decode_fn_unnormalized = WebDatasetDecoder(chunk_size, normalize=False)
     train_split_fn = partial(train_split_filter, split_ratio=train_val_split)
+    
+    temp_train_dataset = (
+        wds.WebDataset(full_pattern, shardshuffle=False)  # No shuffle for stats
+        .decode("torch")
+        .to_tuple("cam1.pth", "cam2.pth", "qpos.pth", "actions.pth")
+        .select(train_split_fn)
+        .map(decode_fn_unnormalized)
+    )
+    
+    temp_train_dataloader = torch.utils.data.DataLoader(
+        temp_train_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=prefetch_factor if num_workers > 0 else 2,
+        drop_last=True
+    )
+    
+    max_samples = None if compute_stats_from_all else 1000
+    dataset_stats = calculate_webdataset_stats(temp_train_dataloader, max_samples=max_samples)
+    
+    # Clean up temporary dataloader
+    del temp_train_dataloader, temp_train_dataset
+    
+    # Step 2: Create normalized dataloaders
+    print(f"Step 2/3: Creating {'normalized' if normalize else 'unnormalized'} dataloaders...")
+    decode_fn = WebDatasetDecoder(chunk_size, normalize=normalize, dataset_stats=dataset_stats if normalize else None)
     val_split_fn = partial(val_split_filter, split_ratio=train_val_split)
     
-    # Create train dataset
-    # Note: Images are now stored as .pth files (PyTorch tensors, uint8)
-    # WebDataset has built-in support for .pth files with decode("torch")
+    # Create train dataset with normalization
     train_dataset = (
         wds.WebDataset(full_pattern, shardshuffle=True)
         .decode("torch")
@@ -613,7 +679,7 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
         .map(decode_fn)
     )
     
-    # Create val dataset
+    # Create val dataset with normalization
     val_dataset = (
         wds.WebDataset(full_pattern, shardshuffle=True)
         .decode("torch")
@@ -643,10 +709,13 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
         drop_last=False
     )
     
-    # Calculate dataset statistics from training data
-    print("Calculating dataset statistics...")
-    max_samples = None if compute_stats_from_all else 1000
-    dataset_stats = calculate_webdataset_stats(train_dataloader, max_samples=max_samples)
+    print("Step 3/3: Dataloaders created successfully!")
+    if normalize:
+        print("✅ Data normalization ENABLED:")
+        print(f"   - Robot state: mean={dataset_stats['observation.state']['mean'][:3].tolist()}, std={dataset_stats['observation.state']['std'][:3].tolist()}")
+        print(f"   - Actions: mean={dataset_stats['action']['mean'][:3].tolist()}, std={dataset_stats['action']['std'][:3].tolist()}")
+    else:
+        print("⚠️  Data normalization DISABLED (using raw values)")
     
     return train_dataloader, val_dataloader, dataset_stats
 
