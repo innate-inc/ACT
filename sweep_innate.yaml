@@ -1,0 +1,57 @@
+program: act_test/train_innate_dist.py
+method: grid  # Use 'random' for random search or 'bayes' for Bayesian optimization
+metric:
+  name: val/action_l1_error
+  goal: minimize
+parameters:
+  # Hyperparameters to sweep
+  learning_rate:
+    values: [1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1, 1.0]
+  weight_decay:
+    values: [0, 1e-5, 1e-4, 1e-3, 1e-2]
+  
+  # Fixed parameters (adjust these to your setup)
+  data_dir:
+    value: /home/vignesh/raid/PaperMulti_1_2_Filtered
+  chunk_size:
+    value: 16
+  batch_size:
+    value: 96
+  num_workers:
+    value: 4
+  max_steps:
+    value: 12000
+  learning_rate_backbone:
+    value: 1e-5
+  
+  # Model architecture (keep fixed)
+  state_dim:
+    value: 6
+  action_dim:
+    value: 10
+  num_queries:
+    value: 8
+  freeze_vision_backbone:
+    value: true
+  proprio_hidden_dim:
+    value: 256
+  diffusion_step_embed_dim:
+    value: 256
+  kernel_size:
+    value: 5
+  n_groups:
+    value: 8
+  num_inference_steps:
+    value: 10
+  
+  # Optimization settings
+  use_bf16:
+    value: true
+  use_compile:
+    value: true
+  
+  # W&B settings
+  wandb_project:
+    value: ip_sweep
+  wandb_entity:
+    value: null

@@ -608,7 +608,6 @@ def train_ddp(rank, world_size, args, webd_dir):
             print(f"✅ ONNX model saved to: {onnx_path}")
             print(f"   Model inputs: image_camera_1, image_camera_2, robot_state")
             print(f"   Model output: predicted_actions (shape: [batch, {CHUNK_SIZE}, {ACTION_DIM}])")
-            wandb.save(onnx_path)
             
             # Clean up the temporary models
             del onnx_policy, inference_wrapper

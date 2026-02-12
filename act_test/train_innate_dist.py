@@ -639,7 +639,6 @@ def train_ddp(rank, world_size, args, webd_dir):
             state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
         torch.save(state_dict, final_checkpoint_path)
         print(f"✅ Final model saved to: {final_checkpoint_path}")
-        wandb.save(final_checkpoint_path)
         
         wandb.finish()
     
@@ -657,7 +656,7 @@ def main():
     parser.add_argument('--data_dir', type=str, 
                         default="/home/vignesh/raid/PaperMulti_1_2_Filtered",
                         help='Path to the HDF5 dataset directory')
-    parser.add_argument('--chunk_size', type=int, default=30,
+    parser.add_argument('--chunk_size', type=int, default=16,
                         help='Action sequence length / chunk size')
     parser.add_argument('--batch_size', type=int, default=96,
                         help='Batch size per GPU (default: 96)')
@@ -669,16 +668,14 @@ def main():
                         help='Force reconversion of HDF5 to WebDataset even if already exists')
     
     # Model Architecture
-    parser.add_argument('--state_dim', type=int, default=14,
-                        help='Dimension of robot state (default: 14)')
-    parser.add_argument('--action_dim', type=int, default=7,
-                        help='Dimension of action space (default: 7)')
-    parser.add_argument('--num_queries', type=int, default=16,
-                        help='Number of attention pooling queries (default: 16)')
-    parser.add_argument('--freeze_vision_backbone', action='store_true', default=True,
-                        help='Freeze DINOv2 backbone weights (default: True)')
-    parser.add_argument('--no-freeze-vision', dest='freeze_vision_backbone', action='store_false',
-                        help='Do not freeze DINOv2 backbone weights')
+    parser.add_argument('--state_dim', type=int, default=6,
+                        help='Dimension of robot state (default: 6)')
+    parser.add_argument('--action_dim', type=int, default=10,
+                        help='Dimension of action space (default: 10)')
+    parser.add_argument('--num_queries', type=int, default=8,
+                        help='Number of attention pooling queries (default: 8)')
+    parser.add_argument('--freeze-vision-backbone', type=lambda x: x.lower() == 'true', default=True,
+                        help='Freeze DINOv2 backbone weights: true or false (default: true)')
     parser.add_argument('--proprio_hidden_dim', type=int, default=256,
                         help='Hidden dimension for proprioception encoder (default: 256)')
     parser.add_argument('--diffusion_step_embed_dim', type=int, default=256,
@@ -705,22 +702,19 @@ def main():
                         help='Number of warmup steps for learning rate scheduler (default: 5%% of max_steps)')
     
     # Optimizations
-    parser.add_argument('--use-bf16', action='store_true', default=True,
-                        help='Use BF16 mixed precision training (default: True)')
-    parser.add_argument('--no-bf16', dest='use_bf16', action='store_false',
-                        help='Disable BF16 mixed precision training')
-    parser.add_argument('--use-compile', action='store_true', default=True,
-                        help='Use torch.compile() for model optimization (default: True)')
-    parser.add_argument('--no-compile', dest='use_compile', action='store_false',
-                        help='Disable torch.compile() optimization')
+    parser.add_argument('--use-bf16', type=lambda x: x.lower() == 'true', default=True,
+                        help='Use BF16 mixed precision: true or false (default: true)')
+    parser.add_argument('--use-compile', type=lambda x: x.lower() == 'true', default=True,
+                        help='Use torch.compile() optimization: true or false (default: true)')
     
     # W&B Configuration
     parser.add_argument('--wandb_project', type=str, default='innate-policy',
                         help='W&B project name (default: innate-policy)')
     parser.add_argument('--wandb_entity', type=str, default=None,
                         help='W&B entity/username (default: None)')
-    parser.add_argument('--wandb_api_key', type=str, default=None,
-                        help='W&B API key (default: None, uses environment variable)')
+    parser.add_argument('--wandb_api_key', type=str, 
+                        default='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',
+                        help='W&B API key (default: hardcoded key)')
     
     args = parser.parse_args()
     
