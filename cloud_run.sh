@@ -22,7 +22,7 @@ set -e
 # =============================================================================
 # Configuration (all via environment variables)
 # =============================================================================
-DATA_DIR="${DATA_DIR:-/training/data}"
+DATA_DIR="${DATA_DIR:-/training/data/data}"
 OUTPUT_DIR="${OUTPUT_DIR:-/training/out}"
 WORLD_SIZE="${WORLD_SIZE:-4}"
 CHUNK_SIZE="${CHUNK_SIZE:-30}"
