@@ -185,7 +185,6 @@ TRAIN_START=$(date +%s)
 
 python3 -m act_test.train_dist \
     --data_dir "${DATA_DIR}" \
-
     --chunk_size ${CHUNK_SIZE} \
     --max_steps ${MAX_STEPS} \
     --learning_rate ${LEARNING_RATE} \
