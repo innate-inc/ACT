@@ -725,7 +725,7 @@ def main():
                         help='Number of flow matching sampling steps (default: 10)')
     
     # Training
-    parser.add_argument('--max_steps', type=int, default=120000,
+    parser.add_argument('--max_steps', type=int, default=100000,
                         help='Maximum number of training steps')
     parser.add_argument('--learning_rate', type=float, default=1e-4,
                         help='Main learning rate (default: 1e-4)')
@@ -739,8 +739,8 @@ def main():
     # Optimizations
     parser.add_argument('--use-bf16', type=lambda x: x.lower() == 'true', default=True,
                         help='Use BF16 mixed precision: true or false (default: true)')
-    parser.add_argument('--use-compile', type=lambda x: x.lower() == 'true', default=True,
-                        help='Use torch.compile() optimization: true or false (default: true)')
+    parser.add_argument('--use-compile', type=lambda x: x.lower() == 'true', default=False,
+                        help='Use torch.compile() optimization: true or false (default: false)')
     parser.add_argument('--normalize-data', type=lambda x: x.lower() == 'true', default=True,
                         help='Normalize actions and robot state: true or false (default: true)')
     
