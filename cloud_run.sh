@@ -125,6 +125,7 @@ fi
 source "${SCRIPT_DIR}/.venv/bin/activate"
 
 pip install --upgrade pip --quiet
+pip install uv --quiet
 
 # Detect GPU architecture and install appropriate PyTorch build
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
@@ -132,15 +133,15 @@ echo "   Detected GPU: ${GPU_NAME}"
 
 if echo "${GPU_NAME}" | grep -qi "B200\|B100\|blackwell"; then
     echo "   ⚡ Blackwell GPU detected - installing PyTorch nightly with CUDA 12.8"
-    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128 --quiet
+    uv pip install --system --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128 --quiet
 else
     echo "   Installing PyTorch with CUDA 12.1"
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet
+    uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet
 fi
 
 # Install project and all dependencies
-pip install -r "${SCRIPT_DIR}/requirements.txt" --quiet
-pip install -e "${SCRIPT_DIR}" --quiet
+uv pip install --system -r "${SCRIPT_DIR}/requirements.txt" --quiet
+uv pip install --system -e "${SCRIPT_DIR}" --quiet
 echo "✅ Python environment ready"
 
 # Disable torch.compile (SIGSEGV issues on some instances)
