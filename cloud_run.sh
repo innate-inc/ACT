@@ -118,30 +118,25 @@ echo ""
 echo "🐍 Setting up Python environment..."
 echo "====================================="
 
-# Create and activate venv
-if [ ! -d "${SCRIPT_DIR}/.venv" ]; then
-    python3 -m venv "${SCRIPT_DIR}/.venv"
-fi
-source "${SCRIPT_DIR}/.venv/bin/activate"
-
-pip install --upgrade pip --quiet
+# Install uv globally then use it — no venv, we're in a container
 pip install uv --quiet
 
 # Detect GPU architecture and install appropriate PyTorch build
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
 echo "   Detected GPU: ${GPU_NAME}"
 
-if echo "${GPU_NAME}" | grep -qi "B200\|B100\|blackwell"; then
+if echo "${GPU_NAME}" | grep -qi "B200\|B100\|blackwell\|RTX 50"; then
     echo "   ⚡ Blackwell GPU detected - installing PyTorch nightly with CUDA 12.8"
-    uv pip install --system --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128 --quiet
+    uv pip install --system --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 else
     echo "   Installing PyTorch with CUDA 12.1"
-    uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet
+    uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 fi
 
-# Install project and all dependencies
-uv pip install --system -r "${SCRIPT_DIR}/requirements.txt" --quiet
-uv pip install --system -e "${SCRIPT_DIR}" --quiet
+# Install requirements — skip torch/torchvision/torchaudio (already installed above)
+# Also skip tensorrt (inference-only, deps conflict with nightly torch)
+grep -vE "^torch|^torchaudio|^torchvision|^tensorrt" "${SCRIPT_DIR}/requirements.txt" | uv pip install --system -r /dev/stdin
+uv pip install --system --no-deps -e "${SCRIPT_DIR}"
 echo "✅ Python environment ready"
 
 # Disable torch.compile (SIGSEGV issues on some instances)
