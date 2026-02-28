@@ -14,4 +14,4 @@ venv/
 gcs-key.json
 gcs-key-auth.json
 sfcompute_orchestrator/gcs-key-auth.json
-sfcompute_orchestrator/.env
+sfcompute_orchestrator/.envkubectl
