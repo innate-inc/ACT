@@ -1,0 +1,167 @@
+# =============================================================================
+# Dockerfile.lambda
+# =============================================================================
+# Docker image for ACT training on Lambda Labs GPU instances
+# 
+# This Dockerfile is optimized for:
+#   - Lambda Labs GPU instances (A100, H100, etc.)
+#   - GCS bucket data access
+#
+# Build (on Linux/amd64):
+#   docker build -t yourusername/act-training:latest -f Dockerfile.lambda .
+#   docker push yourusername/act-training:latest
+#
+# Build (on ARM Mac - cross-compile):
+#   docker buildx build --platform linux/amd64 -t yourusername/act-training:latest -f Dockerfile.lambda --push .
+#
+# Deploy to Lambda Labs:
+#   Use your Lambda Labs deployment scripts
+# =============================================================================
+
+# Use NVIDIA's PyTorch base image with CUDA support
+# This includes PyTorch, CUDA, cuDNN, and NCCL optimized for modern GPUs
+FROM nvcr.io/nvidia/pytorch:24.03-py3
+
+# Set working directory
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONPATH="/app/act_test:/app:${PYTHONPATH:-}"
+ENV PYTHONUNBUFFERED=1
+ENV WANDB_MODE="online"
+ENV NCCL_DEBUG="INFO"
+
+# Install system dependencies including SSH server
+RUN apt-get update && apt-get install -y \
+    git \
+    wget \
+    curl \
+    htop \
+    nvtop \
+    tmux \
+    vim \
+    gnupg \
+    apt-transport-https \
+    ca-certificates \
+    openssh-server \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Google Cloud CLI for GCS data access
+# This allows downloading training data from your GCS bucket
+RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee /etc/apt/sources.list.d/google-cloud-sdk.list \
+    && apt-get update && apt-get install -y google-cloud-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt ./
+
+# Install Python packages
+# NOTE: Base image already includes PyTorch 2.3.x, TensorRT, CUDA, cuDNN - no need to reinstall!
+# Using --prefer-binary to use pre-built wheels instead of compiling from source
+RUN pip install --no-cache-dir --prefer-binary \
+    numpy==1.26.4 \
+    einops==0.8.1 \
+    opencv-python-headless==4.7.0.72 \
+    pillow==11.1.0 \
+    huggingface-hub==0.31.2 \
+    timm==1.0.15 \
+    safetensors==0.5.3 \
+    onnx \
+    h5py==3.13.0 \
+    webdataset==0.2.111 \
+    PyYAML==6.0.2 \
+    matplotlib==3.10.1 \
+    tqdm==4.67.1 \
+    requests==2.32.3 \
+    click==8.1.8 \
+    pydantic==2.10.6 \
+    wandb==0.19.7 \
+    ipython==8.32.0
+
+# Copy the package
+COPY act_test/ ./act_test/
+COPY setup.py ./
+
+# Install the package in development mode
+# Use --no-deps since all dependencies are already installed above
+RUN pip install --no-deps -e .
+
+# Copy scripts
+COPY download_data_lambda.sh /app/
+COPY act_test/lambda_train.sh /app/
+RUN chmod +x /app/download_data_lambda.sh /app/lambda_train.sh
+
+# Create directories for data and outputs
+RUN mkdir -p /app/data /app/outputs /app/checkpoints
+
+# Create a helpful startup script
+RUN cat > /app/start.sh << 'EOF'
+#!/bin/bash
+echo "========================================"
+echo "🚀 ACT Training Container Ready"
+echo "========================================"
+echo ""
+echo "📦 Container info:"
+echo "   PyTorch: $(python -c 'import torch; print(torch.__version__)')"
+echo "   CUDA:    $(python -c 'import torch; print(torch.version.cuda)')"
+echo "   GPUs:    $(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)x $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+echo ""
+echo "📁 Mount your data:"
+echo "   docker run --gpus all -v /data:/data <image>"
+echo ""
+echo "🏋️ Training commands:"
+echo "   1. Download data:  ./download_data_lambda.sh gs://bucket/path"
+echo "   2. Run training:   ./lambda_train.sh --data_gcs_path gs://bucket/path"
+echo ""
+echo "   Or directly:"
+echo "   python -m act_test.train_dist --data_dir /data/dataset"
+echo ""
+echo "========================================"
+
+# If arguments provided, run them
+if [ $# -gt 0 ]; then
+    exec "$@"
+else
+    # Default: start bash
+    exec /bin/bash
+fi
+EOF
+RUN chmod +x /app/start.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD nvidia-smi > /dev/null 2>&1 || exit 1
+
+# Default entrypoint
+ENTRYPOINT ["/app/start.sh"]
+
+# Default command (can be overridden)
+CMD []
+
+# =============================================================================
+# Usage Examples:
+# =============================================================================
+#
+# Build the image:
+#   docker build -t yourusername/act-training:lambda -f Dockerfile.lambda .
+#
+# Push to Docker Hub:
+#   docker push yourusername/act-training:lambda
+#
+# Run interactively on Lambda Labs:
+#   docker run -it --gpus all -v /data:/data yourusername/act-training:lambda
+#
+# Run training directly:
+#   docker run --gpus all -v /data:/data yourusername/act-training:lambda \
+#     python -m act_test.train_dist --data_dir /data/dataset
+#
+# Run with GCS data download:
+#   docker run --gpus all -v /data:/data \
+#     -v ~/.config/gcloud:/root/.config/gcloud \
+#     yourusername/act-training:lambda \
+#     ./lambda_train.sh --data_gcs_path gs://bucket/data
+#
+# =============================================================================
+

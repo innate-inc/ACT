@@ -6,7 +6,7 @@ setup(
     version="0.1.1",
     packages=find_packages(),   # will pick up the act_test directory
     include_package_data=True,
-    package_data={"act_test": ["vertex_train.sh"]},
+    package_data={"act_test": ["lambda_train.sh"]},
     python_requires=">=3.10",  # Specify Python 3.10 minimum requirement
     install_requires=[
         # Core ML/AI packages
