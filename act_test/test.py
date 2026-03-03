@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Test script for HDF5 to WebDataset conversion pipeline.
+
 Designed to run on Lambda Labs instances for debugging.
 """
 
@@ -10,6 +11,8 @@ import argparse
 
 # Fix import path - use absolute import
 from act_test.data_tools.webdataset import convert_hdf5_to_webdataset
+
+
 
 def test_conversion_pipeline(hdf5_dir: str, output_dir: str, shard_size: int = 500):
     """Test the HDF5 to WebDataset conversion pipeline."""
@@ -210,11 +213,8 @@ def main():
     print(f"📦 Shard Size: {args.shard_size}")
     print()
     
-    if not os.path.exists(args.local_dir):
-        print(f"❌ Local directory does not exist: {args.local_dir}")
-        sys.exit(1)
-    
     # Step 1: Test conversion
+    
     conversion_success = test_conversion_pipeline(
         hdf5_dir=args.local_dir,
         output_dir=args.output_dir,
