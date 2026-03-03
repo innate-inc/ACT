@@ -1,65 +1,15 @@
 #!/usr/bin/env python3
 """
 Test script for HDF5 to WebDataset conversion pipeline.
-
-This script downloads data from GCS and tests the conversion pipeline.
 Designed to run on Lambda Labs instances for debugging.
 """
 
 import os
 import sys
-import subprocess
 import argparse
-from pathlib import Path
 
 # Fix import path - use absolute import
 from act_test.data_tools.webdataset import convert_hdf5_to_webdataset
-
-
-def download_from_gcs(gcs_path: str, local_dir: str) -> bool:
-    """
-    Download data from GCS bucket to local directory.
-    
-    Args:
-        gcs_path: GCS path (e.g., gs://bucket/path/to/data)
-        local_dir: Local directory to download to
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    print(f"📥 Downloading data from GCS...")
-    print(f"   Source: {gcs_path}")
-    print(f"   Destination: {local_dir}")
-    
-    # Create local directory
-    os.makedirs(local_dir, exist_ok=True)
-    
-    # Strip trailing slashes
-    gcs_path = gcs_path.rstrip('/')
-    
-    try:
-        # Use gcloud storage cp
-        cmd = ["gcloud", "storage", "cp", "-r", f"{gcs_path}/*", f"{local_dir}/"]
-        print(f"   Running: {' '.join(cmd)}")
-        
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        
-        # Check what was downloaded
-        files = os.listdir(local_dir)
-        print(f"✅ Downloaded {len(files)} files/folders")
-        print(f"   Contents: {files[:10]}{'...' if len(files) > 10 else ''}")
-        
-        return True
-        
-    except subprocess.CalledProcessError as e:
-        print(f"❌ GCS download failed: {e}")
-        print(f"   stdout: {e.stdout}")
-        print(f"   stderr: {e.stderr}")
-        return False
-    except FileNotFoundError:
-        print("❌ gcloud command not found. Please install Google Cloud SDK.")
-        return False
-
 
 def test_conversion_pipeline(hdf5_dir: str, output_dir: str, shard_size: int = 500):
     """Test the HDF5 to WebDataset conversion pipeline."""
@@ -234,12 +184,6 @@ def main():
     """Run all tests."""
     parser = argparse.ArgumentParser(description="Test HDF5 to WebDataset conversion pipeline")
     parser.add_argument(
-        "--gcs-path",
-        type=str,
-        default="gs://innate-manipulation-training-data/default-1/03a6c680-2322-4944-a13c-ed8900206479/raw/extracted/data",
-        help="GCS path to download data from"
-    )
-    parser.add_argument(
         "--local-dir",
         type=str,
         default="/data/test_dataset",
@@ -257,36 +201,20 @@ def main():
         default=500,
         help="Number of samples per shard"
     )
-    parser.add_argument(
-        "--skip-download",
-        action="store_true",
-        help="Skip GCS download (use existing local data)"
-    )
-    
     args = parser.parse_args()
     
     print("🚀 STARTING DATA CONVERSION PIPELINE TESTS")
     print("=" * 60)
-    print(f"📍 GCS Path: {args.gcs_path}")
     print(f"📁 Local Dir: {args.local_dir}")
     print(f"📁 Output Dir: {args.output_dir}")
     print(f"📦 Shard Size: {args.shard_size}")
     print()
     
-    # Step 1: Download data from GCS (unless skipped)
-    if not args.skip_download:
-        if not download_from_gcs(args.gcs_path, args.local_dir):
-            print("\n❌ FAILED TO DOWNLOAD DATA")
-            sys.exit(1)
-    else:
-        print("⏭️  Skipping GCS download (--skip-download)")
-        if not os.path.exists(args.local_dir):
-            print(f"❌ Local directory does not exist: {args.local_dir}")
-            sys.exit(1)
+    if not os.path.exists(args.local_dir):
+        print(f"❌ Local directory does not exist: {args.local_dir}")
+        sys.exit(1)
     
-    print()
-    
-    # Step 2: Test conversion
+    # Step 1: Test conversion
     conversion_success = test_conversion_pipeline(
         hdf5_dir=args.local_dir,
         output_dir=args.output_dir,
