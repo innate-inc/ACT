@@ -9,3 +9,9 @@ wandb/
 dist/
 build/
 act_test.egg-info/
+
+venv/
+gcs-key.json
+gcs-key-auth.json
+sfcompute_orchestrator/gcs-key-auth.json
+sfcompute_orchestrator/.env

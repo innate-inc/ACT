@@ -194,16 +194,19 @@ def initialize_data(
             - val_dataloader: DataLoader for the validation set.
             - dataset_stats: Normalization statistics computed from the training set.
     """
+    # Check for metadata file (try both naming conventions)
     metadata_path = os.path.join(data_dir, "metadata.json")
     if not os.path.exists(metadata_path):
-        raise FileNotFoundError(f"metadata.json not found in {data_dir}")
+        metadata_path = os.path.join(data_dir, "dataset_metadata.json")
+    if not os.path.exists(metadata_path):
+        raise FileNotFoundError(f"metadata.json or dataset_metadata.json not found in {data_dir}")
 
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
 
     all_episode_ids = [ep_info["episode_id"] for ep_info in metadata.get("episodes", [])]
     if not all_episode_ids:
-        raise ValueError("No episodes found in metadata.json or 'episodes' key is missing/empty.")
+        raise ValueError("No episodes found in metadata file or 'episodes' key is missing/empty.")
     
     print(f"Found a total of {len(all_episode_ids)} episodes: {sorted(all_episode_ids)}")
 
@@ -509,20 +512,26 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
     # QPos statistics
     qpos_mean = qpos_sum / qpos_count
     qpos_var = (qpos_sum_sq / qpos_count) - (qpos_mean ** 2)
+    # Clamp variance to non-negative before sqrt to prevent NaN from floating point errors
+    qpos_var = torch.clamp(qpos_var, min=0)
     qpos_std = torch.clamp(torch.sqrt(qpos_var), min=1e-6)
     
     # Action statistics
     action_mean = action_sum / action_count
     action_var = (action_sum_sq / action_count) - (action_mean ** 2)
+    # Clamp variance to non-negative before sqrt to prevent NaN from floating point errors
+    action_var = torch.clamp(action_var, min=0)
     action_std = torch.clamp(torch.sqrt(action_var), min=1e-6)
     
     # Camera statistics
     cam1_mean = (cam1_sum / cam1_count).reshape(-1, 1, 1)  # (3, 1, 1)
     cam1_var = (cam1_sum_sq / cam1_count) - (cam1_sum / cam1_count) ** 2
+    cam1_var = torch.clamp(cam1_var, min=0)  # Prevent negative variance from float precision
     cam1_std = torch.clamp(torch.sqrt(cam1_var), min=1e-6).reshape(-1, 1, 1)
     
     cam2_mean = (cam2_sum / cam2_count).reshape(-1, 1, 1)  # (3, 1, 1)
     cam2_var = (cam2_sum_sq / cam2_count) - (cam2_sum / cam2_count) ** 2
+    cam2_var = torch.clamp(cam2_var, min=0)  # Prevent negative variance from float precision
     cam2_std = torch.clamp(torch.sqrt(cam2_var), min=1e-6).reshape(-1, 1, 1)
     
     dataset_stats = {
@@ -568,7 +577,15 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     if len(all_files) == 0:
         raise FileNotFoundError(f"No WebDataset .tar files found in {data_dir}")
     
-    print(f"Found {len(all_files)} WebDataset files")
+    num_shards = len(all_files)
+    print(f"Found {num_shards} WebDataset files")
+    
+    # Auto-reduce num_workers if we have fewer shards than workers
+    # Each worker needs at least one shard to avoid "No samples found" error
+    if num_workers > num_shards:
+        old_workers = num_workers
+        num_workers = max(1, num_shards)
+        print(f"⚠️  Reducing num_workers from {old_workers} to {num_workers} (only {num_shards} shards available)")
     
     # Create pattern for all files
     if len(all_files) == 1:

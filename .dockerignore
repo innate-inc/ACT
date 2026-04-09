@@ -43,7 +43,15 @@ docs/
 tests/
 test_*.py
 
+# Virtual environments
+venv/
+.venv/
+env/
+
 # Data directories (these should be mounted/provided externally)
 data/
 *.hdf5
-webdataset/ 
+webdataset/
+
+# Cloud init files
+cloud-init*.yaml 
