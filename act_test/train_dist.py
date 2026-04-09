@@ -1,3 +1,4 @@
+import sys
 import torch
 import torch.optim as optim
 import torch.distributed as dist
@@ -225,11 +226,12 @@ def train_ddp(rank, world_size, args, webd_dir):
         )
     except (FileNotFoundError, ValueError) as e:
         if rank == 0:
-            print(f"Error initializing WebDataset: {e}")
+            print(f"❌ Error initializing WebDataset: {e}")
             print(f"Please ensure your data directory '{WEBD_DIR}' contains WebDataset .tar files.")
+            print(f"Note: You need at least as many shards as (num_workers * world_size)")
             wandb.finish(exit_code=1)
         cleanup()
-        return
+        sys.exit(1)  # Exit with error code so the startup script detects the failure
 
     # Save dataset_stats only on rank 0
     if rank == 0 and dataset_stats:
@@ -686,7 +688,7 @@ def main():
     
     if not conversion_success:
         print("❌ Failed to convert data. Exiting...")
-        return
+        sys.exit(1)  # Exit with error code so orchestrator detects failure
     
     print(f"\n{'='*80}")
     print(f"STARTING DISTRIBUTED TRAINING")

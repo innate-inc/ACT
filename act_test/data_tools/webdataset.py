@@ -131,10 +131,13 @@ def convert_hdf5_to_webdataset(hdf5_directory, webd_directory, shard_size=1000, 
     Returns:
         bool: True if conversion successful, False otherwise
     """
+    # Check for metadata file (try both naming conventions)
     metadata_file = os.path.join(hdf5_directory, "metadata.json")
+    if not os.path.exists(metadata_file):
+        metadata_file = os.path.join(hdf5_directory, "dataset_metadata.json")
     
     if not os.path.exists(metadata_file):
-        print(f"❌ Error: metadata.json not found in {hdf5_directory}")
+        print(f"❌ Error: metadata.json or dataset_metadata.json not found in {hdf5_directory}")
         return False
     
     # Create output directory
