@@ -15,7 +15,7 @@ import math
 
 from ACT import ACTConfig, ACTPolicy
 from data_utils import initialize_webdataset_data
-from data_tools.webdataset import convert_hdf5_to_webdataset  # Import conversion function
+from data_tools.webdataset import convert_to_webdataset
 
 def setup(rank, world_size):
     """Initialize the distributed environment."""
@@ -59,11 +59,11 @@ def convert_data_always(data_dir, shard_size=500, force_reconvert=True):
     print(f"🖼️  Image format: uint8 PyTorch tensors, 224x224")
     
     # Perform conversion with optimized settings
-    success = convert_hdf5_to_webdataset(
-        hdf5_directory=DATA_DIR,
+    success = convert_to_webdataset(
+        data_directory=DATA_DIR,
         webd_directory=WEBD_DIR,
         shard_size=shard_size,
-        target_size=(224, 224)  # Resize images to 224x224
+        target_size=(224, 224)
     )
     
     if success:

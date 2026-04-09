@@ -9,7 +9,7 @@ import time  # Add for profiling
 
 from ACT import ACTConfig, ACTPolicy # Assuming ACT.py is in the same directory or PYTHONPATH
 from data_utils import initialize_webdataset_data # Changed from initialize_data to initialize_webdataset_data
-from data_tools.webdataset import convert_hdf5_to_webdataset  # Import conversion function
+from data_tools.webdataset import convert_to_webdataset
 
 # --- Configuration ---
 # Data parameters
@@ -99,8 +99,8 @@ def convert_data_if_needed():
     print(f"📦 Shard size: {SHARD_SIZE}")
     
     # Perform conversion
-    success = convert_hdf5_to_webdataset(
-        hdf5_directory=DATA_DIR,
+    success = convert_to_webdataset(
+        data_directory=DATA_DIR,
         webd_directory=WEBD_DIR,
         shard_size=SHARD_SIZE
     )

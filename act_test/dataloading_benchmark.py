@@ -11,7 +11,7 @@ import json
 import shutil
 
 from data_utils import initialize_webdataset_data
-from data_tools.webdataset import convert_hdf5_to_webdataset
+from data_tools.webdataset import convert_to_webdataset
 
 def setup(rank, world_size):
     """Initialize the distributed environment."""
@@ -76,8 +76,8 @@ def detect_and_convert_dataset(data_dir, force_reconvert=False, shard_size=1000)
         print("=" * 80)
         
         # Perform conversion
-        success = convert_hdf5_to_webdataset(
-            hdf5_directory=data_dir,
+        success = convert_to_webdataset(
+            data_directory=data_dir,
             webd_directory=webd_dir,
             shard_size=shard_size
         )
