@@ -5,7 +5,7 @@ This script orchestrates the full training pipeline:
 1. **Data conversion** – converts HDF5 episodes to WebDataset tar shards
    (runs once on the main process before spawning workers).
 2. **DDP setup** – spawns one process per GPU via ``torch.multiprocessing.spawn``
-   and initialises NCCL-backed ``DistributedDataParallel``.
+   and initializes NCCL-backed ``DistributedDataParallel``.
 3. **Training loop** – step-based loop with WebDataset streaming, optional BF16
    mixed precision (``torch.amp.autocast``), optional ``torch.compile()``,
    linear warmup + cosine annealing LR schedule, periodic validation,
