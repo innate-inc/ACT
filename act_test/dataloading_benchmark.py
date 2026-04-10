@@ -48,9 +48,11 @@ def detect_and_convert_dataset(data_dir, force_reconvert=False, shard_size=1000)
         print("Skipping conversion (dataset already in WebDataset format)")
         return True, data_dir
     
-    # Check if it's an HDF5 directory (contains .h5 files and metadata.json)
+    # Check if it's an HDF5 directory (contains .h5 files and metadata.json or dataset_metadata.json)
     h5_files = [f for f in os.listdir(data_dir) if f.endswith('.h5')]
     metadata_path = os.path.join(data_dir, "metadata.json")
+    if not os.path.exists(metadata_path):
+        metadata_path = os.path.join(data_dir, "dataset_metadata.json")
     
     if h5_files and os.path.exists(metadata_path):
         print(f"📦 Found {len(h5_files)} HDF5 files in {data_dir}")
@@ -93,7 +95,7 @@ def detect_and_convert_dataset(data_dir, force_reconvert=False, shard_size=1000)
     print(f"❌ Error: Could not detect dataset format in {data_dir}")
     print("Expected either:")
     print("  - WebDataset: Directory with .tar files")
-    print("  - HDF5: Directory with .h5 files and metadata.json")
+    print("  - HDF5: Directory with .h5 files and metadata.json (or dataset_metadata.json)")
     return False, None
 
 def benchmark_data_loading(rank, world_size, args, webd_dir):
