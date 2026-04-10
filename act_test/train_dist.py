@@ -1,3 +1,27 @@
+"""Distributed (multi-GPU) training script for the ACT policy.
+
+This script orchestrates the full training pipeline:
+
+1. **Data conversion** – converts HDF5 episodes to WebDataset tar shards
+   (runs once on the main process before spawning workers).
+2. **DDP setup** – spawns one process per GPU via ``torch.multiprocessing.spawn``
+   and initialises NCCL-backed ``DistributedDataParallel``.
+3. **Training loop** – step-based loop with WebDataset streaming, optional BF16
+   mixed precision (``torch.amp.autocast``), optional ``torch.compile()``,
+   linear warmup + cosine annealing LR schedule, periodic validation,
+   checkpointing, and Weights & Biases logging.
+4. **ONNX export** – exports the trained model to ONNX at the end of training
+   (rank 0 only).
+
+Usage::
+
+    python -m act_test.train_dist \\
+        --data_dir /path/to/hdf5_data \\
+        --world_size 4 \\
+        --max_steps 120000 \\
+        --batch_size 96
+"""
+
 import sys
 import torch
 import torch.optim as optim

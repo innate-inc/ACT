@@ -1,3 +1,13 @@
+"""Single-GPU training script for the ACT policy.
+
+Converts HDF5 data to WebDataset format, initialises the ACTPolicy model with
+dataset normalization statistics, and runs a step-based training loop with
+periodic validation, checkpointing, and Weights & Biases logging.
+
+Configuration is done via module-level constants at the top of this file.
+For multi-GPU training, use ``train_dist.py`` instead.
+"""
+
 import torch
 import torch.optim as optim
 from tqdm import tqdm
