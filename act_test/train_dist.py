@@ -33,11 +33,11 @@ def cleanup():
     dist.destroy_process_group()
 
 def convert_data_always(data_dir, shard_size=500, force_reconvert=True):
-    """Always convert HDF5 data to WebDataset format (before distributed training)."""
+    """Always convert episode data to WebDataset format (before distributed training)."""
     DATA_DIR = data_dir
     WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
     
-    print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
+    print("🔄 CONVERTING EPISODES TO WEBDATASET FORMAT")
     print("=" * 50)
     
     # Remove existing WebDataset directory if it exists and force_reconvert is True
@@ -52,8 +52,8 @@ def convert_data_always(data_dir, shard_size=500, force_reconvert=True):
         print("   Skipping conversion (use --force-reconvert to recreate)")
         return True, WEBD_DIR
     
-    print(f"🔄 Converting HDF5 data to WebDataset format...")
-    print(f"📁 HDF5 source: {DATA_DIR}")
+    print(f"🔄 Converting episode data to WebDataset format...")
+    print(f"📁 Source directory: {DATA_DIR}")
     print(f"📁 WebDataset target: {WEBD_DIR}")
     print(f"📦 Shard size: {shard_size}")
     print(f"🖼️  Image format: uint8 PyTorch tensors, 224x224")
@@ -634,7 +634,7 @@ def main():
     # Data
     parser.add_argument('--data_dir', type=str, 
                         default="/home/vignesh/raid/PaperMulti_1_2_Filtered",
-                        help='Path to the HDF5 dataset directory')
+                        help='Path to the episode dataset directory')
     parser.add_argument('--chunk_size', type=int, default=30,
                         help='Action sequence length / chunk size')
     parser.add_argument('--batch_size', type=int, default=96,

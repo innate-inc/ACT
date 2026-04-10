@@ -83,8 +83,8 @@ WANDB_ENTITY = None # Replace with your W&B username or team name if desired
 WANDB_API_KEY = "f25e8c35a0cd601c2cafcdbfd698ce8cfba25a9c"
 
 def convert_data_if_needed():
-    """Convert HDF5 data to WebDataset format, always overwriting existing data."""
-    print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
+    """Convert episode data to WebDataset format, always overwriting existing data."""
+    print("🔄 CONVERTING EPISODES TO WEBDATASET FORMAT")
     print("=" * 50)
     
     # Remove existing WebDataset directory if it exists
@@ -93,8 +93,8 @@ def convert_data_if_needed():
         print(f"🗑️  Removing existing WebDataset directory: {WEBD_DIR}")
         shutil.rmtree(WEBD_DIR)
     
-    print(f"🔄 Converting HDF5 data to WebDataset format...")
-    print(f"📁 HDF5 source: {DATA_DIR}")
+    print(f"🔄 Converting episode data to WebDataset format...")
+    print(f"📁 Source directory: {DATA_DIR}")
     print(f"📁 WebDataset target: {WEBD_DIR}")
     print(f"📦 Shard size: {SHARD_SIZE}")
     
