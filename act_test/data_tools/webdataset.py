@@ -1,3 +1,12 @@
+"""HDF5-to-WebDataset conversion utilities.
+
+Reads HDF5 robot manipulation episode files (images, joint positions, actions),
+resizes camera images to a configurable target size (default 224×224), and packs
+each timestep into WebDataset tar shards containing ``.pth`` PyTorch tensor files.
+
+Primary entry point: ``convert_hdf5_to_webdataset()``.
+"""
+
 import h5py
 import json
 import os
