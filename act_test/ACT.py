@@ -1,3 +1,25 @@
+"""Action Chunking Transformer (ACT) model implementation.
+
+This module contains the full ACT policy architecture for robot imitation learning,
+including:
+
+- **Normalization utilities** (``Normalize``, ``Unnormalize``) for per-feature
+  mean/std or min/max normalization using dataset statistics.
+- **ACTConfig** – dataclass holding all model hyperparameters.
+- **ACTPolicy** – top-level ``nn.Module`` wrapping normalization, the transformer
+  model, and providing ``forward()`` (training with loss) and ``select_action()``
+  (inference with an internal action queue).
+- **ACT** – the core transformer network: optional VAE encoder, ResNet-18 vision
+  backbone with frozen batch-norm, main encoder/decoder with sinusoidal
+  positional embeddings, and a linear action regression head.
+- **ACTTemporalEnsembler** – implements Algorithm 2 from the ACT paper for
+  exponential-weighted temporal ensembling of action chunks.
+
+Reference:
+    Tony Z. Zhao et al., "Learning Fine-Grained Bimanual Manipulation with
+    Low-Cost Hardware", https://arxiv.org/abs/2304.13705
+"""
+
 import math
 from collections import deque
 from dataclasses import dataclass, field
