@@ -175,6 +175,7 @@ def convert_mp4_episode_to_samples(hdf5_path, video_paths, episode_id, target_si
         return [], 0
 
 
+
 def write_samples_to_tar(samples, tar_path, shard_idx):
     """
     Write samples to a tar file (WebDataset shard).

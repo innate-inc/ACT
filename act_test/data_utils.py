@@ -1,3 +1,22 @@
+"""Data loading and preprocessing utilities for ACT policy training.
+
+This module provides two data-loading strategies:
+
+1. **HDF5 in-RAM dataset** (``EpisodicHDF5DatasetRAM``) – loads all episode HDF5
+   files into memory, computes normalization statistics, and yields random
+   timestep samples with action chunking and padding via a standard PyTorch
+   ``Dataset`` / ``DataLoader``.
+
+2. **WebDataset streaming pipeline** (``WebDatasetStreaming``,
+   ``WebDatasetDecoder``, ``initialize_webdataset_data``) – reads pre-converted
+   WebDataset tar shards in a streaming fashion, supports random train/val
+   splitting, and computes online dataset statistics
+   (``calculate_webdataset_stats``).
+
+Typical usage for training is through ``initialize_webdataset_data()``, which
+creates train/val dataloaders and computes normalization statistics in one call.
+"""
+
 import os
 import random
 import h5py
