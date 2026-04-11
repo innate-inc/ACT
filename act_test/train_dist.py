@@ -160,8 +160,8 @@ def train_ddp(rank, world_size, args, webd_dir):
     WARMUP_STEPS = args.warmup_steps if args.warmup_steps is not None else int(0.05 * MAX_STEPS)
     MIN_LR_RATIO = 0.1  # Decay to 1/10th of original LR
     
-    # Calculate checkpoint interval for exactly 10 checkpoints
-    CHECKPOINT_INTERVAL = MAX_STEPS // 10
+    # Calculate checkpoint interval for exactly 10 checkpoints (minimum 1 to avoid division by zero)
+    CHECKPOINT_INTERVAL = max(1, MAX_STEPS // 10)
 
     # W&B Configuration
     WANDB_PROJECT = "act-simple"
@@ -327,7 +327,8 @@ def train_ddp(rank, world_size, args, webd_dir):
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     
     if rank == 0:
-        print(f"Learning rate scheduler: Linear warmup ({WARMUP_STEPS} steps, {WARMUP_STEPS/MAX_STEPS*100:.1f}%) + Cosine annealing to {MIN_LR_RATIO*100:.0f}% of max LR")
+        warmup_percentage = (WARMUP_STEPS / max(1, MAX_STEPS) * 100) if MAX_STEPS > 0 else 0.0
+        print(f"Learning rate scheduler: Linear warmup ({WARMUP_STEPS} steps, {warmup_percentage:.1f}%) + Cosine annealing to {MIN_LR_RATIO*100:.0f}% of max LR")
 
     # Only watch model on rank 0
     if rank == 0:
