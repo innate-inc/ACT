@@ -11,7 +11,7 @@ import json
 import shutil
 
 from data_utils import initialize_webdataset_data
-from data_tools.webdataset import convert_hdf5_to_webdataset
+from data_tools.webdataset import convert_to_webdataset
 
 def setup(rank, world_size):
     """Initialize the distributed environment."""
@@ -48,9 +48,11 @@ def detect_and_convert_dataset(data_dir, force_reconvert=False, shard_size=1000)
         print("Skipping conversion (dataset already in WebDataset format)")
         return True, data_dir
     
-    # Check if it's an HDF5 directory (contains .h5 files and metadata.json)
+    # Check if it's an HDF5 directory (contains .h5 files and metadata.json or dataset_metadata.json)
     h5_files = [f for f in os.listdir(data_dir) if f.endswith('.h5')]
     metadata_path = os.path.join(data_dir, "metadata.json")
+    if not os.path.exists(metadata_path):
+        metadata_path = os.path.join(data_dir, "dataset_metadata.json")
     
     if h5_files and os.path.exists(metadata_path):
         print(f"📦 Found {len(h5_files)} HDF5 files in {data_dir}")
@@ -76,8 +78,8 @@ def detect_and_convert_dataset(data_dir, force_reconvert=False, shard_size=1000)
         print("=" * 80)
         
         # Perform conversion
-        success = convert_hdf5_to_webdataset(
-            hdf5_directory=data_dir,
+        success = convert_to_webdataset(
+            data_directory=data_dir,
             webd_directory=webd_dir,
             shard_size=shard_size
         )
@@ -93,7 +95,7 @@ def detect_and_convert_dataset(data_dir, force_reconvert=False, shard_size=1000)
     print(f"❌ Error: Could not detect dataset format in {data_dir}")
     print("Expected either:")
     print("  - WebDataset: Directory with .tar files")
-    print("  - HDF5: Directory with .h5 files and metadata.json")
+    print("  - HDF5: Directory with .h5 files and metadata.json (or dataset_metadata.json)")
     return False, None
 
 def benchmark_data_loading(rank, world_size, args, webd_dir):

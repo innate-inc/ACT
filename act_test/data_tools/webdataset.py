@@ -1,12 +1,3 @@
-"""HDF5-to-WebDataset conversion utilities.
-
-Reads HDF5 robot manipulation episode files (images, joint positions, actions),
-resizes camera images to a configurable target size (default 224×224), and packs
-each timestep into WebDataset tar shards containing ``.pth`` PyTorch tensor files.
-
-Primary entry point: ``convert_hdf5_to_webdataset()``.
-"""
-
 import h5py
 import json
 import os
@@ -95,6 +86,96 @@ def convert_episode_to_samples(hdf5_path, episode_id, target_size=(224, 224)):
         return [], 0
 
 
+def convert_mp4_episode_to_samples(hdf5_path, video_paths, episode_id, target_size=(224, 224)):
+    """
+    Convert an episode with MP4 video files + HDF5 (actions/qpos only) to WebDataset samples.
+    
+    Args:
+        hdf5_path (str): Path to the episode HDF5 file (contains action and qpos, no images)
+        video_paths (list): List of two MP4 file paths [camera_1.mp4, camera_2.mp4]
+        episode_id (int): Episode ID for naming
+        target_size (tuple): Target image size (height, width) for resizing. Default: (224, 224)
+        
+    Returns:
+        tuple: (list of sample dicts, number of timesteps used)
+    """
+    samples = []
+    caps = []
+
+    try:
+        with h5py.File(hdf5_path, 'r') as f:
+            actions = f['action'][:]
+            qpos = f['observations/qpos'][:]
+            num_h5_timesteps = actions.shape[0]
+
+        for vp in video_paths:
+            cap = cv2.VideoCapture(vp)
+            if not cap.isOpened():
+                print(f"  ❌ Cannot open video: {vp}")
+                for c in caps:
+                    c.release()
+                return [], 0
+            caps.append(cap)
+
+        video_frame_counts = [int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) for cap in caps]
+        min_video_frames = min(video_frame_counts)
+        num_timesteps = min(num_h5_timesteps, min_video_frames)
+
+        if num_h5_timesteps != min_video_frames:
+            print(f"  ⚠️  Episode {episode_id:04d}: H5 has {num_h5_timesteps} timesteps, "
+                  f"videos have {video_frame_counts} frames. Using {num_timesteps}.")
+
+        for timestep in range(num_timesteps):
+            sample_key = f"episode_{episode_id:04d}_{timestep:04d}"
+
+            cam_bytes_list = []
+            for cap in caps:
+                ret, frame = cap.read()
+                if not ret:
+                    print(f"  ❌ Failed to read frame {timestep} from video (episode {episode_id:04d})")
+                    for c in caps:
+                        c.release()
+                    return samples, timestep
+                frame_resized = cv2.resize(frame, (target_size[1], target_size[0]), interpolation=cv2.INTER_AREA)
+                frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+                tensor = torch.from_numpy(frame_rgb)
+                buf = io.BytesIO()
+                torch.save(tensor, buf)
+                cam_bytes_list.append(buf.getvalue())
+
+            qpos_tensor = torch.from_numpy(qpos[timestep].astype(np.float16))
+            qpos_buffer = io.BytesIO()
+            torch.save(qpos_tensor, qpos_buffer)
+            qpos_bytes = qpos_buffer.getvalue()
+
+            actions_future = actions[timestep:]
+            actions_tensor = torch.from_numpy(actions_future.astype(np.float16))
+            actions_buffer = io.BytesIO()
+            torch.save(actions_tensor, actions_buffer)
+            actions_bytes = actions_buffer.getvalue()
+
+            sample = {
+                'key': sample_key,
+                'cam1.pth': cam_bytes_list[0],
+                'cam2.pth': cam_bytes_list[1],
+                'qpos.pth': qpos_bytes,
+                'actions.pth': actions_bytes
+            }
+            samples.append(sample)
+
+        for cap in caps:
+            cap.release()
+
+        return samples, num_timesteps
+
+    except Exception as e:
+        print(f"  ❌ Error processing episode {episode_id:04d}: {e}")
+        for cap in caps:
+            cap.release()
+        return [], 0
+
+
+
 def write_samples_to_tar(samples, tar_path, shard_idx):
     """
     Write samples to a tar file (WebDataset shard).
@@ -127,12 +208,16 @@ def write_samples_to_tar(samples, tar_path, shard_idx):
         return False
 
 
-def convert_hdf5_to_webdataset(hdf5_directory, webd_directory, shard_size=1000, target_size=(224, 224)):
+def convert_to_webdataset(data_directory, webd_directory, shard_size=1000, target_size=(224, 224)):
     """
-    Convert HDF5 episode files to WebDataset format.
+    Convert episode files to WebDataset format.
+    
+    Supports two dataset types based on metadata `dataset_type` field:
+      - Default / "h5": images stored inside HDF5 files
+      - "h264": images stored as separate MP4 video files, HDF5 contains only actions/qpos
     
     Args:
-        hdf5_directory (str): Directory containing HDF5 episode files and metadata.json
+        data_directory (str): Directory containing episode files and metadata.json
         webd_directory (str): Output directory for WebDataset shards
         shard_size (int): Number of samples per shard (default: 1000)
         target_size (tuple): Target image size (height, width) for resizing. Default: (224, 224)
@@ -141,12 +226,12 @@ def convert_hdf5_to_webdataset(hdf5_directory, webd_directory, shard_size=1000, 
         bool: True if conversion successful, False otherwise
     """
     # Check for metadata file (try both naming conventions)
-    metadata_file = os.path.join(hdf5_directory, "metadata.json")
+    metadata_file = os.path.join(data_directory, "metadata.json")
     if not os.path.exists(metadata_file):
-        metadata_file = os.path.join(hdf5_directory, "dataset_metadata.json")
+        metadata_file = os.path.join(data_directory, "dataset_metadata.json")
     
     if not os.path.exists(metadata_file):
-        print(f"❌ Error: metadata.json or dataset_metadata.json not found in {hdf5_directory}")
+        print(f"❌ Error: metadata.json or dataset_metadata.json not found in {data_directory}")
         return False
     
     # Create output directory
@@ -157,21 +242,28 @@ def convert_hdf5_to_webdataset(hdf5_directory, webd_directory, shard_size=1000, 
         with open(metadata_file, 'r') as f:
             metadata = json.load(f)
         
-        print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
+        dataset_type = metadata.get('dataset_type', 'h5')
+        is_h264 = dataset_type == 'h264'
+
+        print("🔄 CONVERTING EPISODES TO WEBDATASET FORMAT")
         print("=" * 60)
         print(f"📋 Task: {metadata.get('task_name', 'N/A')}")
-        print(f"📁 Input: {hdf5_directory}")
+        print(f"📋 Dataset type: {dataset_type}")
+        print(f"📁 Input: {data_directory}")
         print(f"📁 Output: {webd_directory}")
         print(f"📦 Samples per shard: {shard_size}")
         print(f"🖼️  Image resize: {target_size[0]}x{target_size[1]}")
-        print(f"💾 Image format: uint8 numpy arrays")
+        if is_h264:
+            print(f"🎬 Image source: MP4 video files")
+        else:
+            print(f"💾 Image source: HDF5 arrays")
         
         episodes = metadata.get('episodes', [])
         if not episodes:
             print("❌ No episodes found in metadata")
             return False
         
-        # Calculate total expected timesteps for progress bar
+        # Validate episodes and calculate total expected timesteps
         print("📊 Calculating total timesteps...")
         total_timesteps = 0
         valid_episodes = []
@@ -179,17 +271,35 @@ def convert_hdf5_to_webdataset(hdf5_directory, webd_directory, shard_size=1000, 
         for episode in episodes:
             episode_id = episode.get('episode_id', episodes.index(episode))
             file_name = episode.get('file_name', '')
-            hdf5_path = os.path.join(hdf5_directory, file_name)
+            hdf5_path = os.path.join(data_directory, file_name)
             
             if not os.path.exists(hdf5_path):
-                print(f"  ⚠️  File not found: {file_name}")
+                print(f"  ⚠️  H5 file not found: {file_name}")
                 continue
+            
+            # For h264, also check that the video files exist
+            video_abs_paths = []
+            if is_h264:
+                video_files = episode.get('video_files', [])
+                if len(video_files) < 2:
+                    print(f"  ⚠️  Episode {episode_id}: expected 2 video_files, got {len(video_files)}")
+                    continue
+                missing = False
+                for vf in video_files[:2]:
+                    vp = os.path.join(data_directory, vf)
+                    if not os.path.exists(vp):
+                        print(f"  ⚠️  Video file not found: {vf}")
+                        missing = True
+                        break
+                    video_abs_paths.append(vp)
+                if missing:
+                    continue
             
             try:
                 with h5py.File(hdf5_path, 'r') as f:
                     ep_timesteps = f['action'].shape[0]
                     total_timesteps += ep_timesteps
-                    valid_episodes.append((episode, episode_id, hdf5_path, ep_timesteps))
+                    valid_episodes.append((episode, episode_id, hdf5_path, ep_timesteps, video_abs_paths))
             except Exception as e:
                 print(f"  ⚠️  Error reading {file_name}: {e}")
                 continue
@@ -221,9 +331,14 @@ def convert_hdf5_to_webdataset(hdf5_directory, webd_directory, shard_size=1000, 
         
         # Process episodes with single progress bar
         with tqdm(total=total_timesteps, desc="🔄 Converting timesteps", unit="samples") as pbar:
-            for episode_info, episode_id, hdf5_path, expected_timesteps in valid_episodes:
-                # Process episode and get samples
-                episode_samples, actual_timesteps = convert_episode_to_samples(hdf5_path, episode_id, target_size=target_size)
+            for episode_info, episode_id, hdf5_path, expected_timesteps, video_abs_paths in valid_episodes:
+                if is_h264:
+                    episode_samples, actual_timesteps = convert_mp4_episode_to_samples(
+                        hdf5_path, video_abs_paths, episode_id, target_size=target_size)
+                else:
+                    episode_samples, actual_timesteps = convert_episode_to_samples(
+                        hdf5_path, episode_id, target_size=target_size)
+
                 total_samples += len(episode_samples)
                 
                 # Update progress bar
@@ -248,6 +363,7 @@ def convert_hdf5_to_webdataset(hdf5_directory, webd_directory, shard_size=1000, 
         # Create dataset info file
         dataset_info = {
             'task_name': metadata.get('task_name', 'N/A'),
+            'dataset_type': dataset_type,
             'original_episodes': len(episodes),
             'valid_episodes': len(valid_episodes),
             'total_samples': total_samples,
@@ -276,5 +392,5 @@ def convert_hdf5_to_webdataset(hdf5_directory, webd_directory, shard_size=1000, 
         return True
         
     except Exception as e:
-        print(f"❌ Error converting HDF5 to WebDataset: {e}")
+        print(f"❌ Error converting to WebDataset: {e}")
         return False

@@ -2,7 +2,7 @@
 
 This script orchestrates the full training pipeline:
 
-1. **Data conversion** – converts HDF5 episodes to WebDataset tar shards
+1. **Data conversion** – converts episodes to WebDataset tar shards
    (runs once on the main process before spawning workers).
 2. **DDP setup** – spawns one process per GPU via ``torch.multiprocessing.spawn``
    and initializes NCCL-backed ``DistributedDataParallel``.
@@ -16,7 +16,7 @@ This script orchestrates the full training pipeline:
 Usage::
 
     python -m act_test.train_dist \\
-        --data_dir /path/to/hdf5_data \\
+        --data_dir /path/to/data \\
         --world_size 4 \\
         --max_steps 120000 \\
         --batch_size 96
@@ -39,7 +39,7 @@ import math
 
 from ACT import ACTConfig, ACTPolicy
 from data_utils import initialize_webdataset_data
-from data_tools.webdataset import convert_hdf5_to_webdataset  # Import conversion function
+from data_tools.webdataset import convert_to_webdataset
 
 def setup(rank, world_size):
     """Initialize the distributed environment."""
@@ -57,11 +57,11 @@ def cleanup():
     dist.destroy_process_group()
 
 def convert_data_always(data_dir, shard_size=500, force_reconvert=True):
-    """Always convert HDF5 data to WebDataset format (before distributed training)."""
+    """Always convert episode data to WebDataset format (before distributed training)."""
     DATA_DIR = data_dir
     WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
     
-    print("🔄 CONVERTING HDF5 TO WEBDATASET FORMAT")
+    print("🔄 CONVERTING EPISODES TO WEBDATASET FORMAT")
     print("=" * 50)
     
     # Remove existing WebDataset directory if it exists and force_reconvert is True
@@ -76,18 +76,18 @@ def convert_data_always(data_dir, shard_size=500, force_reconvert=True):
         print("   Skipping conversion (use --force-reconvert to recreate)")
         return True, WEBD_DIR
     
-    print(f"🔄 Converting HDF5 data to WebDataset format...")
-    print(f"📁 HDF5 source: {DATA_DIR}")
+    print(f"🔄 Converting episode data to WebDataset format...")
+    print(f"📁 Source directory: {DATA_DIR}")
     print(f"📁 WebDataset target: {WEBD_DIR}")
     print(f"📦 Shard size: {shard_size}")
     print(f"🖼️  Image format: uint8 PyTorch tensors, 224x224")
     
     # Perform conversion with optimized settings
-    success = convert_hdf5_to_webdataset(
-        hdf5_directory=DATA_DIR,
+    success = convert_to_webdataset(
+        data_directory=DATA_DIR,
         webd_directory=WEBD_DIR,
         shard_size=shard_size,
-        target_size=(224, 224)  # Resize images to 224x224
+        target_size=(224, 224)
     )
     
     if success:
@@ -658,7 +658,7 @@ def main():
     # Data
     parser.add_argument('--data_dir', type=str, 
                         default="/home/vignesh/raid/PaperMulti_1_2_Filtered",
-                        help='Path to the HDF5 dataset directory')
+                        help='Path to the episode dataset directory')
     parser.add_argument('--chunk_size', type=int, default=30,
                         help='Action sequence length / chunk size')
     parser.add_argument('--batch_size', type=int, default=96,

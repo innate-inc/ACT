@@ -10,7 +10,7 @@ import sys
 import argparse
 
 # Fix import path - use absolute import
-from act_test.data_tools.webdataset import convert_hdf5_to_webdataset
+from act_test.data_tools.webdataset import convert_to_webdataset
 
 
 
@@ -51,8 +51,8 @@ def test_conversion_pipeline(hdf5_dir: str, output_dir: str, shard_size: int = 5
     
     # Run the conversion
     try:
-        success = convert_hdf5_to_webdataset(
-            hdf5_directory=hdf5_dir,
+        success = convert_to_webdataset(
+            data_directory=hdf5_dir,
             webd_directory=output_dir,
             shard_size=shard_size
         )
