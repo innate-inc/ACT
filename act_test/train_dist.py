@@ -120,6 +120,18 @@ def train_ddp(rank, world_size, args, webd_dir):
     TASK_NAME = os.path.basename(DATA_DIR.rstrip('/'))
     TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
     RUN_NAME = f"{TASK_NAME}_{TIMESTAMP}_ddp"
+
+    # Override RUN_NAME with user_id/job_id from JOB_SPEC_URL if available
+    JOB_SPEC_URL = os.getenv("JOB_SPEC_URL")
+    if JOB_SPEC_URL:
+        try:
+            from urllib.parse import urlparse
+            path_parts = urlparse(JOB_SPEC_URL).path.strip('/').split('/')
+            # URL format: /managed-innate-training/<user_id>/<job_id>/...
+            if len(path_parts) >= 3:
+                RUN_NAME = f"{path_parts[1]}/{path_parts[2]}"
+        except Exception:
+            pass
     CHECKPOINT_DIR = os.path.join(DATA_DIR, "checkpoints", RUN_NAME)
 
     # Use the WebDataset directory passed from main
