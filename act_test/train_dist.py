@@ -37,6 +37,7 @@ import time
 import argparse
 import math
 
+from urllib.parse import urlparse
 from ACT import ACTConfig, ACTPolicy
 from data_utils import initialize_webdataset_data
 from data_tools.webdataset import convert_to_webdataset
@@ -125,13 +126,12 @@ def train_ddp(rank, world_size, args, webd_dir):
     JOB_SPEC_URL = os.getenv("JOB_SPEC_URL")
     if JOB_SPEC_URL:
         try:
-            from urllib.parse import urlparse
             path_parts = urlparse(JOB_SPEC_URL).path.strip('/').split('/')
             # URL format: /managed-innate-training/<user_id>/<job_id>/...
             if len(path_parts) >= 3:
                 RUN_NAME = f"{path_parts[1]}/{path_parts[2]}"
-        except Exception:
-            pass
+        except (ValueError, IndexError) as e:
+            print(f"Warning: failed to parse JOB_SPEC_URL: {e}")
     CHECKPOINT_DIR = os.path.join(DATA_DIR, "checkpoints", RUN_NAME)
 
     # Use the WebDataset directory passed from main
