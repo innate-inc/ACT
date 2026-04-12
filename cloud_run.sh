@@ -19,6 +19,27 @@
 
 set -e
 
+# RunPod's HTTP proxy can drop/recycle idle connections, causing sporadic 404s
+# on outbound requests (including pip/uv installs). Wrap installs with retries.
+MAX_RETRIES=5
+RETRY_DELAY=10
+
+retry() {
+    local attempt
+    for attempt in $(seq 1 $MAX_RETRIES); do
+        if "$@"; then
+            return 0
+        fi
+        echo "⚠️  Attempt ${attempt}/${MAX_RETRIES} failed: $*"
+        if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+            echo "   Retrying in ${RETRY_DELAY}s..."
+            sleep $RETRY_DELAY
+        fi
+    done
+    echo "❌ All ${MAX_RETRIES} attempts failed: $*"
+    return 1
+}
+
 # =============================================================================
 # Configuration (all via environment variables)
 # =============================================================================
@@ -103,8 +124,8 @@ echo ""
 echo "📦 Installing system dependencies..."
 echo "====================================="
 
-apt-get update -qq
-apt-get install -y -qq \
+retry apt-get update -qq
+retry apt-get install -y -qq \
     python3-pip \
     python3-venv \
     libgl1-mesa-glx \
@@ -119,7 +140,7 @@ echo "🐍 Setting up Python environment..."
 echo "====================================="
 
 # Set up virtualenv + uv for dependency management
-pip install uv --quiet
+retry pip install uv --quiet
 if [ ! -d "${SCRIPT_DIR}/.venv" ]; then
     uv venv "${SCRIPT_DIR}/.venv"
 fi
@@ -131,16 +152,17 @@ echo "   Detected GPU: ${GPU_NAME}"
 
 if echo "${GPU_NAME}" | grep -qi "B200\|B100\|blackwell\|RTX 50"; then
     echo "   ⚡ Blackwell GPU detected - installing PyTorch nightly with CUDA 12.8"
-    uv pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    retry uv pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 else
     echo "   Installing PyTorch with CUDA 12.1"
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    retry uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 fi
 
 # Install requirements — skip torch/torchvision/torchaudio (already installed above)
 # Also skip tensorrt (inference-only, deps conflict with nightly torch)
-grep -vE "^torch|^torchaudio|^torchvision|^tensorrt" "${SCRIPT_DIR}/requirements.txt" | uv pip install -r /dev/stdin
-uv pip install --no-deps -e "${SCRIPT_DIR}"
+grep -vE "^torch|^torchaudio|^torchvision|^tensorrt" "${SCRIPT_DIR}/requirements.txt" > /tmp/filtered_requirements.txt
+retry uv pip install -r /tmp/filtered_requirements.txt
+retry uv pip install --no-deps -e "${SCRIPT_DIR}"
 echo "✅ Python environment ready"
 
 # Disable torch.compile (SIGSEGV issues on some instances)
