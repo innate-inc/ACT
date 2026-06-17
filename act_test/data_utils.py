@@ -223,7 +223,14 @@ def initialize_data(
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
 
-    all_episode_ids = [ep_info["episode_id"] for ep_info in metadata.get("episodes", [])]
+    episodes_meta = metadata.get("episodes", [])
+    # Optional curation filter: when TRAIN_ON_SUCCESS_ONLY=1, drop episodes the
+    # operator marked as failures (per-episode "outcome" in the metadata).
+    if os.environ.get("TRAIN_ON_SUCCESS_ONLY") == "1":
+        before = len(episodes_meta)
+        episodes_meta = [ep for ep in episodes_meta if ep.get("outcome") != "failure"]
+        print(f"TRAIN_ON_SUCCESS_ONLY=1 → training on {len(episodes_meta)}/{before} successful episodes")
+    all_episode_ids = [ep_info["episode_id"] for ep_info in episodes_meta]
     if not all_episode_ids:
         raise ValueError("No episodes found in metadata file or 'episodes' key is missing/empty.")
     
