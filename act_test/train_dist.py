@@ -471,9 +471,11 @@ def train_ddp(rank, world_size, args, webd_dir):
             })
 
             # Progress marker for the cloud webapp's step bar/ETA. Quote-free
-            # so it survives JSON-escaping in process_output.jsonl.
+            # so it survives JSON-escaping in process_output.jsonl. step is
+            # 0-indexed; report step+1 so the count reads as steps-completed
+            # (1..MAX_STEPS) and the final marker is MAX_STEPS/MAX_STEPS.
             if step % 25 == 0 or step >= MAX_STEPS - 1:
-                print(f'@@INNATE_PROGRESS step={step} total={MAX_STEPS}', flush=True)
+                print(f'@@INNATE_PROGRESS step={step + 1} total={MAX_STEPS}', flush=True)
 
         step += 1
         
