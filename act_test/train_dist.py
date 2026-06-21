@@ -42,6 +42,11 @@ from ACT import ACTConfig, ACTPolicy
 from data_utils import initialize_webdataset_data
 from data_tools.webdataset import convert_to_webdataset
 
+DEFAULT_SOCK_YOLO_WEIGHTS = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "assets", "sock_yolo11n_best.pt")
+)
+
+
 def setup(rank, world_size):
     """Initialize the distributed environment."""
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -57,7 +62,31 @@ def cleanup():
     """Clean up the distributed environment."""
     dist.destroy_process_group()
 
-def convert_data_always(data_dir, shard_size=500, force_reconvert=True):
+def webdataset_matches_sock_state(webd_dir, use_sock_state):
+    info_path = os.path.join(webd_dir, "dataset_info.json")
+    if not os.path.exists(info_path):
+        return not use_sock_state
+    try:
+        import json
+        with open(info_path, "r") as f:
+            info = json.load(f)
+        return bool(info.get("sock_state_enabled", False)) == bool(use_sock_state)
+    except Exception as e:
+        print(f"⚠️  Could not inspect existing WebDataset metadata: {e}")
+        return False
+
+
+def convert_data_always(
+    data_dir,
+    shard_size=500,
+    force_reconvert=True,
+    use_sock_state=False,
+    sock_yolo_weights=DEFAULT_SOCK_YOLO_WEIGHTS,
+    sock_yolo_conf=0.25,
+    sock_yolo_imgsz=640,
+    sock_yolo_batch=32,
+    sock_yolo_device=None,
+):
     """Always convert episode data to WebDataset format (before distributed training)."""
     DATA_DIR = data_dir
     WEBD_DIR = os.path.join(DATA_DIR, "webdataset")
@@ -71,24 +100,35 @@ def convert_data_always(data_dir, shard_size=500, force_reconvert=True):
         print(f"🗑️  Removing existing WebDataset directory: {WEBD_DIR}")
         shutil.rmtree(WEBD_DIR)
     
-    # Check if already converted
     if os.path.exists(WEBD_DIR) and not force_reconvert:
-        print(f"✅ WebDataset directory already exists: {WEBD_DIR}")
-        print("   Skipping conversion (use --force-reconvert to recreate)")
-        return True, WEBD_DIR
+        if webdataset_matches_sock_state(WEBD_DIR, use_sock_state):
+            print(f"✅ WebDataset directory already exists: {WEBD_DIR}")
+            print("   Skipping conversion (use --force-reconvert to recreate)")
+            return True, WEBD_DIR
+        import shutil
+        print("⚠️  Existing WebDataset sock-state setting does not match this run")
+        print(f"🗑️  Removing existing WebDataset directory: {WEBD_DIR}")
+        shutil.rmtree(WEBD_DIR)
     
     print(f"🔄 Converting episode data to WebDataset format...")
     print(f"📁 Source directory: {DATA_DIR}")
     print(f"📁 WebDataset target: {WEBD_DIR}")
     print(f"📦 Shard size: {shard_size}")
     print(f"🖼️  Image format: uint8 PyTorch tensors, 224x224")
+    print(f"🧦 Sock state: {'enabled' if use_sock_state else 'disabled'}")
     
     # Perform conversion with optimized settings
     success = convert_to_webdataset(
         data_directory=DATA_DIR,
         webd_directory=WEBD_DIR,
         shard_size=shard_size,
-        target_size=(224, 224)
+        target_size=(224, 224),
+        use_sock_state=use_sock_state,
+        sock_yolo_weights=sock_yolo_weights,
+        sock_yolo_conf=sock_yolo_conf,
+        sock_yolo_imgsz=sock_yolo_imgsz,
+        sock_yolo_batch=sock_yolo_batch,
+        sock_yolo_device=sock_yolo_device,
     )
     
     if success:
@@ -112,6 +152,7 @@ def train_ddp(rank, world_size, args, webd_dir):
 
     # WebDataset conversion parameters
     SHARD_SIZE = args.shard_size
+    USE_SOCK_STATE = args.use_sock_state
     
     # Training optimization parameters
     USE_BF16 = args.use_bf16  # BF16 mixed precision training
@@ -149,6 +190,8 @@ def train_ddp(rank, world_size, args, webd_dir):
         "observation.image_camera_2": [IMAGE_C, IMAGE_H, IMAGE_W],
         "observation.state": [QPOS_DIM]
     }
+    if USE_SOCK_STATE:
+        INPUT_SHAPES["observation.environment_state"] = [10]
     OUTPUT_SHAPES = {
         "action": [ACTION_DIM]
     }
@@ -213,6 +256,11 @@ def train_ddp(rank, world_size, args, webd_dir):
             "total_effective_batch_size": BATCH_SIZE * world_size,
             "num_workers": NUM_WORKERS,
             "shard_size": SHARD_SIZE,
+            "use_sock_state": USE_SOCK_STATE,
+            "sock_yolo_weights": args.sock_yolo_weights,
+            "sock_yolo_conf": args.sock_yolo_conf,
+            "sock_yolo_imgsz": args.sock_yolo_imgsz,
+            "sock_yolo_batch": args.sock_yolo_batch,
             
             # Hardware
             "world_size": world_size,
@@ -258,7 +306,8 @@ def train_ddp(rank, world_size, args, webd_dir):
             train_val_split=TRAIN_VAL_SPLIT,
             num_workers=NUM_WORKERS,
             prefetch_factor=2,
-            seed=42 + rank
+            seed=42 + rank,
+            use_sock_state=USE_SOCK_STATE,
         )
     except (FileNotFoundError, ValueError) as e:
         if rank == 0:
@@ -588,13 +637,15 @@ def train_ddp(rank, world_size, args, webd_dir):
                     super().__init__()
                     self.policy = policy
                 
-                def forward(self, img_cam1, img_cam2, robot_state):
+                def forward(self, img_cam1, img_cam2, robot_state, sock_state=None):
                     """Forward pass for inference - returns predicted actions only."""
                     batch = {
                         "observation.image_camera_1": img_cam1,
                         "observation.image_camera_2": img_cam2,
                         "observation.state": robot_state,
                     }
+                    if USE_SOCK_STATE:
+                        batch["observation.environment_state"] = sock_state
                     # Normalize inputs
                     batch = self.policy.normalize_inputs(batch)
                     # Prepare batch for model (adds latent if VAE is used)
@@ -628,6 +679,19 @@ def train_ddp(rank, world_size, args, webd_dir):
             dummy_img_cam1 = torch.randn(1, IMAGE_C, IMAGE_H, IMAGE_W, device=device)
             dummy_img_cam2 = torch.randn(1, IMAGE_C, IMAGE_H, IMAGE_W, device=device)
             dummy_robot_state = torch.randn(1, QPOS_DIM, device=device)
+            dummy_inputs = (dummy_img_cam1, dummy_img_cam2, dummy_robot_state)
+            input_names = ['image_camera_1', 'image_camera_2', 'robot_state']
+            dynamic_axes = {
+                'image_camera_1': {0: 'batch_size'},
+                'image_camera_2': {0: 'batch_size'},
+                'robot_state': {0: 'batch_size'},
+                'predicted_actions': {0: 'batch_size'}
+            }
+            if USE_SOCK_STATE:
+                dummy_sock_state = torch.randn(1, 10, device=device)
+                dummy_inputs = dummy_inputs + (dummy_sock_state,)
+                input_names.append('sock_state')
+                dynamic_axes['sock_state'] = {0: 'batch_size'}
             
             # Define ONNX export path
             onnx_path = os.path.join(CHECKPOINT_DIR, "act_policy_final.onnx")
@@ -636,23 +700,18 @@ def train_ddp(rank, world_size, args, webd_dir):
             # Export to ONNX for inference
             torch.onnx.export(
                 inference_wrapper,
-                (dummy_img_cam1, dummy_img_cam2, dummy_robot_state),
+                dummy_inputs,
                 onnx_path,
                 export_params=True,
                 opset_version=14,
                 do_constant_folding=True,
-                input_names=['image_camera_1', 'image_camera_2', 'robot_state'],
+                input_names=input_names,
                 output_names=['predicted_actions'],
-                dynamic_axes={
-                    'image_camera_1': {0: 'batch_size'},
-                    'image_camera_2': {0: 'batch_size'},
-                    'robot_state': {0: 'batch_size'},
-                    'predicted_actions': {0: 'batch_size'}
-                }
+                dynamic_axes=dynamic_axes
             )
             
             print(f"✅ ONNX model saved to: {onnx_path}")
-            print(f"   Model inputs: image_camera_1, image_camera_2, robot_state")
+            print(f"   Model inputs: {', '.join(input_names)}")
             print(f"   Model output: predicted_actions (shape: [batch, {CHUNK_SIZE}, {ACTION_DIM}])")
             wandb.save(onnx_path)
             
@@ -689,6 +748,18 @@ def main():
                         help='Number of samples per WebDataset shard (default: 500)')
     parser.add_argument('--force-reconvert', action='store_true',
                         help='Force reconversion of HDF5 to WebDataset even if already exists')
+    parser.add_argument('--use-sock-state', action='store_true',
+                        help='Add YOLO-derived sock state as observation.environment_state')
+    parser.add_argument('--sock-yolo-weights', type=str, default=DEFAULT_SOCK_YOLO_WEIGHTS,
+                        help='Path to YOLO checkpoint for sock-state generation')
+    parser.add_argument('--sock-yolo-conf', type=float, default=0.25,
+                        help='YOLO confidence threshold for sock-state generation')
+    parser.add_argument('--sock-yolo-imgsz', type=int, default=640,
+                        help='YOLO inference image size for sock-state generation')
+    parser.add_argument('--sock-yolo-batch', type=int, default=32,
+                        help='YOLO batch size for sock-state generation')
+    parser.add_argument('--sock-yolo-device', type=str, default=None,
+                        help='YOLO inference device, e.g. 0, cuda, or cpu')
     
     # Training
     parser.add_argument('--max_steps', type=int, default=120000,
@@ -727,7 +798,13 @@ def main():
     conversion_success, webd_dir = convert_data_always(
         args.data_dir, 
         shard_size=args.shard_size,
-        force_reconvert=force_reconvert
+        force_reconvert=force_reconvert,
+        use_sock_state=args.use_sock_state,
+        sock_yolo_weights=args.sock_yolo_weights,
+        sock_yolo_conf=args.sock_yolo_conf,
+        sock_yolo_imgsz=args.sock_yolo_imgsz,
+        sock_yolo_batch=args.sock_yolo_batch,
+        sock_yolo_device=args.sock_yolo_device,
     )
     
     if not conversion_success:
@@ -745,6 +822,7 @@ def main():
     print(f"  Directory: {args.data_dir}")
     print(f"  WebDataset: {webd_dir}")
     print(f"  Shard size: {args.shard_size} samples")
+    print(f"  Sock state: {'enabled' if args.use_sock_state else 'disabled'}")
     print(f"  Batch size per GPU: {args.batch_size}")
     print(f"  Total effective batch: {args.batch_size * world_size}")
     print(f"  Workers per GPU: {args.num_workers}")

@@ -10,6 +10,60 @@ from tqdm import tqdm
 import torch
 
 
+def _torch_save_bytes(tensor):
+    buffer = io.BytesIO()
+    torch.save(tensor, buffer)
+    return buffer.getvalue()
+
+
+def _box_to_sock_state(result, conf_threshold, width, height):
+    empty = np.zeros((5,), dtype=np.float32)
+    boxes = getattr(result, "boxes", None)
+    if boxes is None or len(boxes) == 0:
+        return empty
+
+    confs = boxes.conf.detach().cpu().numpy()
+    keep = np.where(confs >= conf_threshold)[0]
+    if keep.size == 0:
+        return empty
+
+    best_idx = int(keep[np.argmax(confs[keep])])
+    x1, y1, x2, y2 = boxes.xyxy[best_idx].detach().cpu().numpy().astype(np.float32)
+    state = np.array(
+        [
+            1.0,
+            ((x1 + x2) * 0.5) / max(width, 1),
+            ((y1 + y2) * 0.5) / max(height, 1),
+            (x2 - x1) / max(width, 1),
+            (y2 - y1) / max(height, 1),
+        ],
+        dtype=np.float32,
+    )
+    return np.clip(state, 0.0, 1.0)
+
+
+def _predict_sock_states(model, frames, *, width, height, conf_threshold, imgsz, batch_size, device):
+    if model is None:
+        return None
+    if not frames:
+        return np.zeros((0, 5), dtype=np.float32)
+
+    states = []
+    for start in range(0, len(frames), batch_size):
+        batch = frames[start:start + batch_size]
+        results = model.predict(
+            batch,
+            imgsz=imgsz,
+            conf=conf_threshold,
+            device=device,
+            verbose=False,
+            max_det=3,
+        )
+        for result in results:
+            states.append(_box_to_sock_state(result, conf_threshold, width, height))
+    return np.stack(states).astype(np.float32)
+
+
 def convert_episode_to_samples(hdf5_path, episode_id, target_size=(224, 224)):
     """
     Convert a single HDF5 episode file to WebDataset samples.
@@ -86,7 +140,17 @@ def convert_episode_to_samples(hdf5_path, episode_id, target_size=(224, 224)):
         return [], 0
 
 
-def convert_mp4_episode_to_samples(hdf5_path, video_paths, episode_id, target_size=(224, 224)):
+def convert_mp4_episode_to_samples(
+    hdf5_path,
+    video_paths,
+    episode_id,
+    target_size=(224, 224),
+    sock_yolo_model=None,
+    sock_yolo_conf=0.25,
+    sock_yolo_imgsz=640,
+    sock_yolo_batch=32,
+    sock_yolo_device=None,
+):
     """
     Convert an episode with MP4 video files + HDF5 (actions/qpos only) to WebDataset samples.
     
@@ -125,46 +189,74 @@ def convert_mp4_episode_to_samples(hdf5_path, video_paths, episode_id, target_si
             print(f"  ⚠️  Episode {episode_id:04d}: H5 has {num_h5_timesteps} timesteps, "
                   f"videos have {video_frame_counts} frames. Using {num_timesteps}.")
 
-        for timestep in range(num_timesteps):
-            sample_key = f"episode_{episode_id:04d}_{timestep:04d}"
+        camera_frame_bytes = [[], []]
+        camera_yolo_frames = [[], []]
+        camera_sizes = []
 
-            cam_bytes_list = []
-            for cap in caps:
+        for cap_idx, cap in enumerate(caps):
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            camera_sizes.append((width, height))
+
+            for timestep in range(num_timesteps):
                 ret, frame = cap.read()
                 if not ret:
-                    print(f"  ❌ Failed to read frame {timestep} from video (episode {episode_id:04d})")
+                    print(f"  ❌ Failed to read frame {timestep} from camera {cap_idx + 1} (episode {episode_id:04d})")
                     for c in caps:
                         c.release()
                     return samples, timestep
+
+                if sock_yolo_model is not None:
+                    camera_yolo_frames[cap_idx].append(frame)
+
                 frame_resized = cv2.resize(frame, (target_size[1], target_size[0]), interpolation=cv2.INTER_AREA)
                 frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
                 tensor = torch.from_numpy(frame_rgb)
-                buf = io.BytesIO()
-                torch.save(tensor, buf)
-                cam_bytes_list.append(buf.getvalue())
+                camera_frame_bytes[cap_idx].append(_torch_save_bytes(tensor))
+
+            cap.release()
+
+        camera_sock_states = None
+        if sock_yolo_model is not None:
+            if sock_yolo_device is None:
+                sock_yolo_device = "0" if torch.cuda.is_available() else "cpu"
+            camera_sock_states = []
+            for frames, (width, height) in zip(camera_yolo_frames, camera_sizes):
+                camera_sock_states.append(
+                    _predict_sock_states(
+                        sock_yolo_model,
+                        frames,
+                        width=width,
+                        height=height,
+                        conf_threshold=sock_yolo_conf,
+                        imgsz=sock_yolo_imgsz,
+                        batch_size=sock_yolo_batch,
+                        device=sock_yolo_device,
+                    )
+                )
+
+        for timestep in range(num_timesteps):
+            sample_key = f"episode_{episode_id:04d}_{timestep:04d}"
 
             qpos_tensor = torch.from_numpy(qpos[timestep].astype(np.float16))
-            qpos_buffer = io.BytesIO()
-            torch.save(qpos_tensor, qpos_buffer)
-            qpos_bytes = qpos_buffer.getvalue()
 
             actions_future = actions[timestep:]
             actions_tensor = torch.from_numpy(actions_future.astype(np.float16))
-            actions_buffer = io.BytesIO()
-            torch.save(actions_tensor, actions_buffer)
-            actions_bytes = actions_buffer.getvalue()
 
             sample = {
                 'key': sample_key,
-                'cam1.pth': cam_bytes_list[0],
-                'cam2.pth': cam_bytes_list[1],
-                'qpos.pth': qpos_bytes,
-                'actions.pth': actions_bytes
+                'cam1.pth': camera_frame_bytes[0][timestep],
+                'cam2.pth': camera_frame_bytes[1][timestep],
+                'qpos.pth': _torch_save_bytes(qpos_tensor),
+                'actions.pth': _torch_save_bytes(actions_tensor)
             }
+            if camera_sock_states is not None:
+                sock_state = np.concatenate(
+                    [states[timestep] for states in camera_sock_states],
+                    axis=0,
+                ).astype(np.float16)
+                sample['sock_state.pth'] = _torch_save_bytes(torch.from_numpy(sock_state))
             samples.append(sample)
-
-        for cap in caps:
-            cap.release()
 
         return samples, num_timesteps
 
@@ -208,7 +300,18 @@ def write_samples_to_tar(samples, tar_path, shard_idx):
         return False
 
 
-def convert_to_webdataset(data_directory, webd_directory, shard_size=1000, target_size=(224, 224)):
+def convert_to_webdataset(
+    data_directory,
+    webd_directory,
+    shard_size=1000,
+    target_size=(224, 224),
+    use_sock_state=False,
+    sock_yolo_weights=None,
+    sock_yolo_conf=0.25,
+    sock_yolo_imgsz=640,
+    sock_yolo_batch=32,
+    sock_yolo_device=None,
+):
     """
     Convert episode files to WebDataset format.
     
@@ -221,6 +324,7 @@ def convert_to_webdataset(data_directory, webd_directory, shard_size=1000, targe
         webd_directory (str): Output directory for WebDataset shards
         shard_size (int): Number of samples per shard (default: 1000)
         target_size (tuple): Target image size (height, width) for resizing. Default: (224, 224)
+        use_sock_state (bool): If True, add a YOLO-derived sock_state.pth tensor to each sample.
     
     Returns:
         bool: True if conversion successful, False otherwise
@@ -244,6 +348,20 @@ def convert_to_webdataset(data_directory, webd_directory, shard_size=1000, targe
         
         dataset_type = metadata.get('dataset_type', 'h5')
         is_h264 = dataset_type == 'h264'
+        sock_yolo_model = None
+
+        if use_sock_state:
+            if not is_h264:
+                print("❌ Sock-state conversion currently requires h264 datasets with MP4 video files")
+                return False
+            if not sock_yolo_weights or not os.path.exists(sock_yolo_weights):
+                print(f"❌ Sock YOLO weights not found: {sock_yolo_weights}")
+                return False
+            from ultralytics import YOLO
+            print(f"🧦 Loading sock YOLO checkpoint: {sock_yolo_weights}")
+            sock_yolo_model = YOLO(sock_yolo_weights)
+            if sock_yolo_device is None:
+                sock_yolo_device = "0" if torch.cuda.is_available() else "cpu"
 
         print("🔄 CONVERTING EPISODES TO WEBDATASET FORMAT")
         print("=" * 60)
@@ -257,6 +375,9 @@ def convert_to_webdataset(data_directory, webd_directory, shard_size=1000, targe
             print(f"🎬 Image source: MP4 video files")
         else:
             print(f"💾 Image source: HDF5 arrays")
+        print(f"🧦 Sock state: {'enabled' if use_sock_state else 'disabled'}")
+        if use_sock_state:
+            print(f"   YOLO conf/imgsz/batch/device: {sock_yolo_conf}/{sock_yolo_imgsz}/{sock_yolo_batch}/{sock_yolo_device}")
         
         episodes = metadata.get('episodes', [])
         if not episodes:
@@ -334,7 +455,16 @@ def convert_to_webdataset(data_directory, webd_directory, shard_size=1000, targe
             for episode_info, episode_id, hdf5_path, expected_timesteps, video_abs_paths in valid_episodes:
                 if is_h264:
                     episode_samples, actual_timesteps = convert_mp4_episode_to_samples(
-                        hdf5_path, video_abs_paths, episode_id, target_size=target_size)
+                        hdf5_path,
+                        video_abs_paths,
+                        episode_id,
+                        target_size=target_size,
+                        sock_yolo_model=sock_yolo_model,
+                        sock_yolo_conf=sock_yolo_conf,
+                        sock_yolo_imgsz=sock_yolo_imgsz,
+                        sock_yolo_batch=sock_yolo_batch,
+                        sock_yolo_device=sock_yolo_device,
+                    )
                 else:
                     episode_samples, actual_timesteps = convert_episode_to_samples(
                         hdf5_path, episode_id, target_size=target_size)
@@ -376,8 +506,21 @@ def convert_to_webdataset(data_directory, webd_directory, shard_size=1000, targe
                 'cam2.pth': f'RGB image from camera 2 (torch.uint8, {target_size[0]}x{target_size[1]}x3)', 
                 'qpos.pth': 'Joint positions (torch.float16)',
                 'actions.pth': 'Future actions from current timestep (torch.float16)'
-            }
+            },
+            'sock_state_enabled': use_sock_state,
         }
+        if use_sock_state:
+            dataset_info['sample_format']['sock_state.pth'] = (
+                'YOLO sock state for camera 1 and camera 2: '
+                '[valid, cx, cy, w, h] x 2, normalized torch.float16'
+            )
+            dataset_info['sock_yolo'] = {
+                'weights': os.path.basename(sock_yolo_weights),
+                'conf': sock_yolo_conf,
+                'imgsz': sock_yolo_imgsz,
+                'batch': sock_yolo_batch,
+                'device': sock_yolo_device,
+            }
         
         info_path = os.path.join(webd_directory, 'dataset_info.json')
         with open(info_path, 'w') as f:

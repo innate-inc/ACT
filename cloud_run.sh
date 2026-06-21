@@ -15,6 +15,7 @@
 #   LEARNING_RATE_BACKBONE  Backbone learning rate (default: 5e-5)
 #   BATCH_SIZE     Batch size per GPU (default: 96)
 #   NUM_WORKERS    DataLoader workers per GPU (default: 4)
+#   USE_SOCK_STATE Enable YOLO-derived sock state input (default: 0)
 # =============================================================================
 
 set -e
@@ -43,6 +44,7 @@ retry() {
 # =============================================================================
 # Configuration (all via environment variables)
 # =============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${DATA_DIR:-/training/data/data}"
 OUTPUT_DIR="${OUTPUT_DIR:-/training/out}"
 WORLD_SIZE="${WORLD_SIZE:-4}"
@@ -52,8 +54,15 @@ LEARNING_RATE="${LEARNING_RATE:-5e-5}"
 LEARNING_RATE_BACKBONE="${LEARNING_RATE_BACKBONE:-5e-5}"
 BATCH_SIZE="${BATCH_SIZE:-96}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
+SHARD_SIZE="${SHARD_SIZE:-500}"
+FORCE_RECONVERT="${FORCE_RECONVERT:-0}"
+USE_SOCK_STATE="${USE_SOCK_STATE:-0}"
+SOCK_YOLO_WEIGHTS="${SOCK_YOLO_WEIGHTS:-${SCRIPT_DIR}/act_test/assets/sock_yolo11n_best.pt}"
+SOCK_YOLO_CONF="${SOCK_YOLO_CONF:-0.25}"
+SOCK_YOLO_IMGSZ="${SOCK_YOLO_IMGSZ:-640}"
+SOCK_YOLO_BATCH="${SOCK_YOLO_BATCH:-32}"
+SOCK_YOLO_DEVICE="${SOCK_YOLO_DEVICE:-}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 # =============================================================================
@@ -72,6 +81,16 @@ echo "   Learning rate:         ${LEARNING_RATE}"
 echo "   LR backbone:           ${LEARNING_RATE_BACKBONE}"
 echo "   Batch size per GPU:    ${BATCH_SIZE}"
 echo "   Workers per GPU:       ${NUM_WORKERS}"
+echo "   Shard size:            ${SHARD_SIZE}"
+echo "   Force reconvert:       ${FORCE_RECONVERT}"
+echo "   Sock state:            ${USE_SOCK_STATE}"
+if [[ "${USE_SOCK_STATE}" == "1" || "${USE_SOCK_STATE,,}" == "true" ]]; then
+    echo "   Sock YOLO weights:     ${SOCK_YOLO_WEIGHTS}"
+    echo "   Sock YOLO conf:        ${SOCK_YOLO_CONF}"
+    echo "   Sock YOLO imgsz:       ${SOCK_YOLO_IMGSZ}"
+    echo "   Sock YOLO batch:       ${SOCK_YOLO_BATCH}"
+    echo "   Sock YOLO device:      ${SOCK_YOLO_DEVICE:-auto}"
+fi
 echo ""
 
 # =============================================================================
@@ -177,10 +196,12 @@ python3 -c "
 import torch
 import numpy
 import cv2
+import ultralytics
 print(f'   PyTorch:  {torch.__version__}')
 print(f'   CUDA:     {torch.cuda.is_available()} (devices: {torch.cuda.device_count()})')
 print(f'   NumPy:    {numpy.__version__}')
 print(f'   OpenCV:   {cv2.__version__}')
+print(f'   Ultralytics: {ultralytics.__version__}')
 "
 
 # =============================================================================
@@ -190,30 +211,45 @@ echo ""
 echo "🏋️ Starting Distributed Training"
 echo "================================="
 echo ""
+TRAIN_ARGS=(
+    --data_dir "${DATA_DIR}"
+    --chunk_size "${CHUNK_SIZE}"
+    --max_steps "${MAX_STEPS}"
+    --learning_rate "${LEARNING_RATE}"
+    --learning_rate_backbone "${LEARNING_RATE_BACKBONE}"
+    --batch_size "${BATCH_SIZE}"
+    --num_workers "${NUM_WORKERS}"
+    --world_size "${WORLD_SIZE}"
+    --shard_size "${SHARD_SIZE}"
+)
+
+if [[ "${FORCE_RECONVERT}" == "1" || "${FORCE_RECONVERT,,}" == "true" ]]; then
+    TRAIN_ARGS+=(--force-reconvert)
+fi
+
+if [[ "${USE_SOCK_STATE}" == "1" || "${USE_SOCK_STATE,,}" == "true" ]]; then
+    TRAIN_ARGS+=(
+        --use-sock-state
+        --sock-yolo-weights "${SOCK_YOLO_WEIGHTS}"
+        --sock-yolo-conf "${SOCK_YOLO_CONF}"
+        --sock-yolo-imgsz "${SOCK_YOLO_IMGSZ}"
+        --sock-yolo-batch "${SOCK_YOLO_BATCH}"
+    )
+    if [[ -n "${SOCK_YOLO_DEVICE}" ]]; then
+        TRAIN_ARGS+=(--sock-yolo-device "${SOCK_YOLO_DEVICE}")
+    fi
+fi
+
 echo "Training command:"
-echo "   python3 -m act_test.train_dist \\"
-echo "     --data_dir ${DATA_DIR} \\"
-echo "     --chunk_size ${CHUNK_SIZE} \\"
-echo "     --max_steps ${MAX_STEPS} \\"
-echo "     --learning_rate ${LEARNING_RATE} \\"
-echo "     --learning_rate_backbone ${LEARNING_RATE_BACKBONE} \\"
-echo "     --batch_size ${BATCH_SIZE} \\"
-echo "     --num_workers ${NUM_WORKERS} \\"
-echo "     --world_size ${WORLD_SIZE}"
+printf '   python3 -m act_test.train_dist'
+printf ' %q' "${TRAIN_ARGS[@]}"
+printf '\n'
 echo ""
 
 # Run training
 TRAIN_START=$(date +%s)
 
-python3 -m act_test.train_dist \
-    --data_dir "${DATA_DIR}" \
-    --chunk_size ${CHUNK_SIZE} \
-    --max_steps ${MAX_STEPS} \
-    --learning_rate ${LEARNING_RATE} \
-    --learning_rate_backbone ${LEARNING_RATE_BACKBONE} \
-    --batch_size ${BATCH_SIZE} \
-    --num_workers ${NUM_WORKERS} \
-    --world_size ${WORLD_SIZE}
+python3 -m act_test.train_dist "${TRAIN_ARGS[@]}"
 
 TRAIN_EXIT_CODE=$?
 TRAIN_END=$(date +%s)
@@ -243,4 +279,3 @@ echo "   Output:      ${OUTPUT_DIR}"
 echo ""
 
 exit $TRAIN_EXIT_CODE
-

@@ -338,7 +338,7 @@ class WebDatasetStreaming:
         
         print(f"WebDataset pattern validated: {dataset_path}")
     
-    def decode_sample(self, cam1, cam2, qpos, actions):
+    def decode_sample(self, cam1, cam2, qpos, actions, sock_state=None):
         """Decode a single sample from WebDataset and convert to ACT policy format."""
         # Images are now uint8 torch tensors (HWC format: 224x224x3)
         # Convert to float32, HWC to CHW, and normalize to [0, 1]
@@ -368,6 +368,8 @@ class WebDatasetStreaming:
             'action': padded_actions,  # (chunk_size, action_dim)
             'action_is_pad': is_pad_tensor  # (chunk_size,)
         }
+        if sock_state is not None:
+            sample['observation.environment_state'] = sock_state.float()
         
         return sample
     
@@ -398,12 +400,17 @@ def val_split_filter(x, split_ratio=0.8):
 class WebDatasetDecoder:
     """Picklable decoder class for WebDataset."""
     
-    def __init__(self, chunk_size):
+    def __init__(self, chunk_size, use_sock_state=False):
         self.chunk_size = chunk_size
+        self.use_sock_state = use_sock_state
     
     def __call__(self, sample_tuple):
         """Decode a single sample from WebDataset and convert to ACT policy format."""
-        cam1, cam2, qpos, actions = sample_tuple
+        if self.use_sock_state:
+            cam1, cam2, qpos, actions, sock_state = sample_tuple
+        else:
+            cam1, cam2, qpos, actions = sample_tuple
+            sock_state = None
         
         # Images are now uint8 torch tensors (HWC format: 224x224x3)
         # Convert to float32, HWC to CHW, and normalize to [0, 1]
@@ -433,6 +440,8 @@ class WebDatasetDecoder:
             'action': padded_actions,  # (chunk_size, action_dim)
             'action_is_pad': is_pad_tensor  # (chunk_size,)
         }
+        if sock_state is not None:
+            sample['observation.environment_state'] = sock_state.float()
         
         return sample
 
@@ -459,6 +468,10 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
     cam2_sum = None
     cam2_sum_sq = None
     cam2_count = 0
+
+    env_sum = None
+    env_sum_sq = None
+    env_count = 0
     
     sample_count = 0
     
@@ -515,6 +528,15 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
         cam2_sum += cam2_batch_flat.sum(dim=(0, 2))
         cam2_sum_sq += (cam2_batch_flat ** 2).sum(dim=(0, 2))
         cam2_count += batch_size * cam2_batch.shape[2] * cam2_batch.shape[3]
+
+        if 'observation.environment_state' in batch:
+            env_batch = batch['observation.environment_state']
+            if env_sum is None:
+                env_sum = torch.zeros_like(env_batch[0])
+                env_sum_sq = torch.zeros_like(env_batch[0])
+            env_sum += env_batch.sum(dim=0)
+            env_sum_sq += (env_batch ** 2).sum(dim=0)
+            env_count += batch_size
         
         sample_count += batch_size
         
@@ -578,6 +600,15 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
             'std': cam2_std
         }
     }
+    if env_count > 0:
+        env_mean = env_sum / env_count
+        env_var = (env_sum_sq / env_count) - (env_mean ** 2)
+        env_var = torch.clamp(env_var, min=0)
+        env_std = torch.clamp(torch.sqrt(env_var), min=1e-6)
+        dataset_stats['observation.environment_state'] = {
+            'mean': env_mean,
+            'std': env_std,
+        }
     
     print("Dataset statistics computed successfully!")
     print(f"Processed {sample_count} samples, {qpos_count} qpos, {action_count} actions")
@@ -586,7 +617,8 @@ def calculate_webdataset_stats(dataloader, max_samples=None):
 
 def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8, 
                               train_val_split=0.8, num_workers=4, 
-                              prefetch_factor=2, seed=42, compute_stats_from_all=True):
+                              prefetch_factor=2, seed=42, compute_stats_from_all=True,
+                              use_sock_state=False):
     """
     Initialize WebDataset-based training and validation dataloaders.
     Uses WebDataset's built-in splitting mechanism.
@@ -635,7 +667,10 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     print(f"Using dataset pattern: {full_pattern}")
     
     # Create decode functions - no augmentation parameters
-    decode_fn = WebDatasetDecoder(chunk_size)
+    decode_fn = WebDatasetDecoder(chunk_size, use_sock_state=use_sock_state)
+    tuple_fields = ("cam1.pth", "cam2.pth", "qpos.pth", "actions.pth")
+    if use_sock_state:
+        tuple_fields = tuple_fields + ("sock_state.pth",)
     
     # Create split functions using functional approach
     train_split_fn = partial(train_split_filter, split_ratio=train_val_split)
@@ -647,7 +682,7 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     train_dataset = (
         wds.WebDataset(full_pattern, shardshuffle=True)
         .decode("torch")
-        .to_tuple("cam1.pth", "cam2.pth", "qpos.pth", "actions.pth")
+        .to_tuple(*tuple_fields)
         .select(train_split_fn)
         .map(decode_fn)
     )
@@ -656,31 +691,33 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     val_dataset = (
         wds.WebDataset(full_pattern, shardshuffle=True)
         .decode("torch")
-        .to_tuple("cam1.pth", "cam2.pth", "qpos.pth", "actions.pth")
+        .to_tuple(*tuple_fields)
         .select(val_split_fn)
         .map(decode_fn)
     )
     
     # Create dataloaders
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=True if num_workers > 0 else False,
-        prefetch_factor=prefetch_factor if num_workers > 0 else 2,
-        drop_last=True
-    )
+    train_kwargs = {
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "pin_memory": True,
+        "drop_last": True,
+    }
+    val_kwargs = {
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "pin_memory": True,
+        "drop_last": False,
+    }
+    if num_workers > 0:
+        train_kwargs["persistent_workers"] = True
+        train_kwargs["prefetch_factor"] = prefetch_factor
+        val_kwargs["persistent_workers"] = True
+        val_kwargs["prefetch_factor"] = prefetch_factor
+
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
     
-    val_dataloader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=True if num_workers > 0 else False,
-        prefetch_factor=prefetch_factor if num_workers > 0 else 2,
-        drop_last=False
-    )
+    val_dataloader = torch.utils.data.DataLoader(val_dataset, **val_kwargs)
     
     # Calculate dataset statistics from training data
     print("Calculating dataset statistics...")
@@ -688,4 +725,3 @@ def initialize_webdataset_data(data_dir, chunk_size=100, batch_size=8,
     dataset_stats = calculate_webdataset_stats(train_dataloader, max_samples=max_samples)
     
     return train_dataloader, val_dataloader, dataset_stats
-

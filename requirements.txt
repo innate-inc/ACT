@@ -8,6 +8,7 @@ einops==0.8.1
 # Computer Vision
 opencv-python==4.7.0.72
 pillow==11.1.0
+ultralytics==8.4.75
 
 # ML Libraries
 huggingface-hub==0.31.2
